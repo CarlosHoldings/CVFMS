@@ -54,7 +54,7 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
           </div>
           <div>
             <div className="text-xl text-gray-900">Transport System</div>
-            <div className="text-xs text-gray-500">Company Vehicle Management</div>
+            <div className="text-xs text-gray-500">Eskimo Fashion Knitwear (Pvt) Ltd - Vehicle Management</div>
           </div>
         </div>
       </div>
