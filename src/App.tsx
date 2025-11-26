@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Login } from './components/auth/Login';
-import { UserRegistration } from './components/user/UserRegistration';
-import { DriverRegistration } from './components/driver/DriverRegistration';
-import { AdminRegistration } from './components/admin/AdminRegistration';
+import { UserRegistration } from './components/auth/UserRegistration';
+import { DriverRegistration } from './components/auth/DriverRegistration';
+import { AdminRegistration } from './components/auth/AdminRegistration';
 import { UserDashboard } from './components/user/UserDashboard';
 import { DriverDashboard } from './components/driver/DriverDashboard';
 import { AdminDashboard } from './components/admin/AdminDashboard';
