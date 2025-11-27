@@ -16,6 +16,8 @@ import { ViewTrip } from './components/user/ViewTrip';
 import { DriverTripDetail } from './components/driver/DriverTripDetail';
 import { TripHistory } from './components/shared/TripHistory';
 
+import { InstallPrompt } from './components/shared/InstallPrompt';
+
 // Firebase Imports
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';

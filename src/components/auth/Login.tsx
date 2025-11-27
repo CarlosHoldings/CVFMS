@@ -1,10 +1,9 @@
 import { useState } from 'react';
-import { Mail, Lock, Car, Eye, EyeOff, Wifi, AlertTriangle } from 'lucide-react';
-// FIX: Import User from types to avoid circular dependency errors
-// If you haven't created src/types.ts yet, change this back to '../../App'
-import { User } from '../../types'; 
+import { Mail, Lock, Car, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { User } from '../../App';
+// Firebase Imports
 import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
-import { doc, getDoc, enableNetwork } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../../firebase';
 
 interface LoginProps {
@@ -27,19 +26,14 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
   // --- Helper to fetch user details safely with Retry ---
   const fetchUserDetailsWithRetry = async (uid: string, retries = 3): Promise<User> => {
     try {
-        // Attempt to force network connection (Fixes 'Client is offline' issues)
-        try { await enableNetwork(db); } catch (e) { console.log("Network already enabled"); }
-
         const userDoc = await getDoc(doc(db, "users", uid));
         
         if (userDoc.exists()) {
           const userData = userDoc.data();
-          console.log("User Found:", userData); // Debugging Log
-
+          
           // Security Check: Ensure role matches selected tab
-          // Note: We compare lowercase to be safe
-          if (userData.role?.toLowerCase() !== loginType.toLowerCase()) {
-              throw new Error(`Access Denied: This account is a '${userData.role}', but you are trying to login as '${loginType}'. Please switch the tab above.`);
+          if (userData.role !== loginType) {
+              throw new Error(`Access Denied: This email is registered as '${userData.role}', but you are trying to login as '${loginType}'. Please switch the tab above.`);
           }
 
           // Driver Approval Checks
@@ -59,14 +53,13 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
               ...userData
           } as User;
         } else {
-          throw new Error('User profile not found in database. Please contact Admin.');
+          throw new Error('User profile not found in database. Please register again.');
         }
     } catch (err: any) {
-        console.error("Fetch Error:", err);
-        // If "offline" or network error, wait and TRY AGAIN
-        if (retries > 0 && (err.message?.includes("offline") || err.code === 'unavailable' || err.message?.includes("Connection failed"))) {
-            console.warn(`Connection unstable. Retrying... (${retries} attempts left)`);
-            await delay(500); // Wait 0.5s
+        // Retry logic for genuine network blips
+        if (retries > 0 && (err.message?.includes("offline") || err.code === 'unavailable')) {
+            console.warn(`Connection failed. Retrying... (${retries} attempts left)`);
+            await delay(500); 
             return fetchUserDetailsWithRetry(uid, retries - 1);
         }
         throw err;
@@ -87,18 +80,15 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
       onLogin(appUser);
 
     } catch (err: any) {
-      console.error("Login Error Full:", err);
-      
-      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+      console.error("Login Error:", err);
+      if (err.code === 'auth/invalid-credential') {
         setError('Invalid email or password.');
       } else if (err.code === 'auth/too-many-requests') {
-        setError('Too many failed attempts. Access blocked temporarily. Please wait 5 minutes.');
+        setError('Too many failed attempts. Please wait 5 minutes.');
       } else if (err.code === 'auth/network-request-failed') {
         setError('Network error. Please check your internet connection.');
-      } else if (err.message && err.message.includes("offline")) {
-         setError('Connection unstable. Please check internet and try again.');
       } else {
-        setError(err.message || 'Failed to login.');
+        setError(err.message || 'Login failed.');
       }
     } finally {
       setLoading(false);
@@ -236,7 +226,9 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
                   <input type="checkbox" className="w-4 h-4 text-[#2563EB] border-gray-300 rounded focus:ring-[#2563EB]" />
                   <span className="text-sm text-gray-700">Remember me</span>
                 </label>
-                <button type="button" className="text-sm text-[#2563EB]">Forgot Password?</button>
+                <button type="button" className="text-sm text-[#2563EB] hover:text-[#1E40AF]">
+                  Forgot Password?
+                </button>
               </div>
 
               <button
