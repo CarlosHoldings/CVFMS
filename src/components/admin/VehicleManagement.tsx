@@ -593,7 +593,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
                    <div><label className="text-xs">New Expiry</label><input type="date" className="w-full p-2 border rounded" value={licenseData.newInsuranceExpiry} onChange={e => setLicenseData({...licenseData, newInsuranceExpiry: e.target.value})} /></div>
                    <div><label className="text-xs">Cost (LKR)</label><input type="number" className="w-full p-2 border rounded" value={licenseData.insuranceCost} onChange={e => setLicenseData({...licenseData, insuranceCost: e.target.value})} /></div>
                 </div>
-                <div className="flex gap-3 mt-4 pt-4 border-t"><button onClick={() => setShowLicenseModal(false)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleRenewLicense} className="flex-1 py-2 bg-blue-600 text-white rounded">Save Renewal</button></div>
+                <div className="flex gap-3 mt-4 pt-4 border-t"><button onClick={() => setShowLicenseModal(false)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleRenewLicense} className="flex-1 py-2 bg-blue-600 flex-1 py-2 border rounded">Save Renewal</button></div>
              </Card>
           </div>
       )}
@@ -731,7 +731,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
                <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50">Cancel</button>
                <button 
                  onClick={handleSubmitVehicle} 
-                 className="flex-1 py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 shadow-sm"
+                 className="flex-1 py-3 bg-blue-600 text-gray-700 font-medium rounded-xl hover:bg-blue-700 shadow-sm"
                >
                  {isEditing ? 'Update Vehicle' : 'Save Vehicle'}
                </button>
