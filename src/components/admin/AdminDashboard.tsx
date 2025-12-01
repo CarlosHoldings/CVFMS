@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Car, Calendar, CheckCircle, XCircle, Navigation, Users, AlertCircle } from 'lucide-react';
+import { Car, Calendar, CheckCircle, XCircle, Navigation, Users, AlertCircle, Shield, Lock, X } from 'lucide-react';
 import { User } from '../../App';
 import { TopNav } from '../shared/TopNav';
 import { Card } from '../shared/Card';
 import { Badge } from '../shared/Badge';
-// Firebase Imports
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
+
+// 🔒 HIDDEN CODE TO ENTER THE ADMIN PANEL
+const PANEL_ACCESS_CODE = "OPEN_2025"; 
 
 interface AdminDashboardProps {
   user: User;
@@ -15,7 +17,7 @@ interface AdminDashboardProps {
 }
 
 export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardProps) {
-  // 1. State for Data
+  // 1. Data State
   const [liveVehicles, setLiveVehicles] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [stats, setStats] = useState({
@@ -26,30 +28,28 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
   });
   const [loading, setLoading] = useState(true);
 
-  // 2. Fetch Data from Firebase
+  // 2. Security Modal State
+  const [showSecurityModal, setShowSecurityModal] = useState(false);
+  const [securityCode, setSecurityCode] = useState("");
+  const [securityError, setSecurityError] = useState("");
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // A. Fetch Vehicles
         const vehiclesSnapshot = await getDocs(collection(db, "vehicles"));
         const vehicles = vehiclesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setLiveVehicles(vehicles);
 
-        // B. Fetch Trip Requests (All of them to calculate stats)
         const requestsSnapshot = await getDocs(collection(db, "trip_requests"));
         const requests = requestsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // C. Filter for "Pending" requests to show in the list
         const pending = requests.filter((req: any) => req.status === 'pending');
         setPendingRequests(pending);
 
-        // D. Calculate Stats
         const activeVehiclesCount = vehicles.filter((v: any) => v.status === 'in-use').length;
         const completedTripsCount = requests.filter((r: any) => r.status === 'completed').length;
         const cancelledTripsCount = requests.filter((r: any) => r.status === 'cancelled').length;
         
-        // Assuming 'total trips today' means requests for today (simplified for now as total requests)
-        // You can add date filtering logic here later
         setStats({
           totalTrips: requests.length,
           activeVehicles: activeVehiclesCount,
@@ -67,6 +67,18 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
     fetchData();
   }, []);
 
+  // 3. Handle Security Verification
+  const handleAdminPanelAccess = () => {
+    if (securityCode === PANEL_ACCESS_CODE) {
+      setShowSecurityModal(false);
+      setSecurityCode(""); // Clear code
+      setSecurityError("");
+      onNavigate('admin-management'); // Navigate only if code is correct
+    } else {
+      setSecurityError("❌ Access Denied: Invalid Code");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center">
@@ -80,13 +92,12 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
       <TopNav user={user} onNavigate={onNavigate} onLogout={onLogout} currentScreen="admin-dashboard" />
       
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="text-3xl text-gray-900 mb-2">Admin Dashboard</h1>
           <p className="text-gray-600">Monitor and manage the entire transport system</p>
         </div>
 
-        {/* Quick Stats */}
+        {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <Card className="p-6">
             <div className="flex items-center gap-4">
@@ -99,7 +110,6 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </div>
           </Card>
-
           <Card className="p-6">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
@@ -111,7 +121,6 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </div>
           </Card>
-
           <Card className="p-6">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
@@ -123,7 +132,6 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </div>
           </Card>
-
           <Card className="p-6">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
@@ -137,7 +145,6 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
           </Card>
         </div>
 
-        {/* Pending Requests Alert */}
         {pendingRequests.length > 0 && (
           <div className="mb-8">
             <div className="bg-orange-50 border-2 border-orange-200 rounded-2xl p-6">
@@ -150,10 +157,7 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
                   <p className="text-gray-600 mb-4">
                     You have {pendingRequests.length} trip requests waiting for approval
                   </p>
-                  <button
-                    onClick={() => onNavigate('trip-approval')}
-                    className="px-6 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-all"
-                  >
+                  <button onClick={() => onNavigate('trip-approval')} className="px-6 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-all">
                     Review Requests
                   </button>
                 </div>
@@ -163,26 +167,15 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Live Vehicle Map */}
           <div className="lg:col-span-2">
             <Card className="p-6">
               <h2 className="text-xl text-gray-900 mb-4">Live Vehicle Tracking</h2>
-              
-              {/* Mock Map Placeholder */}
               <div className="w-full h-96 bg-gray-200 rounded-xl flex items-center justify-center mb-4 relative overflow-hidden">
-                 {/* Note: To implement a Real Google Map here later:
-                    1. Install: npm install @react-google-maps/api
-                    2. Import { GoogleMap, LoadScript } ...
-                    3. Replace this div with the map component.
-                 */}
                 <div className="text-center z-10">
                   <Navigation className="w-16 h-16 text-[#2563EB] mx-auto mb-3" />
                   <p className="text-gray-500">Real-time Vehicle Locations</p>
-                  <p className="text-sm text-gray-400">Map integration requires API Key</p>
                 </div>
               </div>
-
-              {/* Vehicle List */}
               <div className="space-y-3 max-h-64 overflow-y-auto">
                 {liveVehicles.length === 0 ? (
                   <p className="text-gray-500 text-center py-4">No vehicles found in database.</p>
@@ -211,10 +204,25 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
 
           {/* Quick Actions */}
           <div className="space-y-6">
+            
+            {/* 🔒 SECURE ADMIN MANAGEMENT CARD */}
+            {/* When clicked, it now opens the security modal instead of navigating directly */}
             <Card 
-              onClick={() => onNavigate('trip-approval')}
-              className="p-6 cursor-pointer hover:shadow-lg transition-all"
+              onClick={() => setShowSecurityModal(true)} 
+              className="p-6 cursor-pointer hover:shadow-lg transition-all border-l-4 border-red-500"
             >
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
+                  <Shield className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <div className="text-gray-900 font-medium">Admin Management</div>
+                  <div className="text-sm text-gray-500">Restricted Access</div>
+                </div>
+              </div>
+            </Card>
+
+            <Card onClick={() => onNavigate('trip-approval')} className="p-6 cursor-pointer hover:shadow-lg transition-all">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 bg-orange-100 rounded-xl flex items-center justify-center">
                   <AlertCircle className="w-6 h-6 text-orange-600" />
@@ -226,10 +234,7 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </Card>
 
-            <Card 
-              onClick={() => onNavigate('vehicle-management')}
-              className="p-6 cursor-pointer hover:shadow-lg transition-all"
-            >
+            <Card onClick={() => onNavigate('vehicle-management')} className="p-6 cursor-pointer hover:shadow-lg transition-all">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center">
                   <Car className="w-6 h-6 text-green-600" />
@@ -241,10 +246,7 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </Card>
 
-            <Card 
-              onClick={() => onNavigate('driver-management')}
-              className="p-6 cursor-pointer hover:shadow-lg transition-all"
-            >
+            <Card onClick={() => onNavigate('driver-management')} className="p-6 cursor-pointer hover:shadow-lg transition-all">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
                   <Users className="w-6 h-6 text-purple-600" />
@@ -256,10 +258,7 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </Card>
 
-            <Card 
-              onClick={() => onNavigate('user-management')}
-              className="p-6 cursor-pointer hover:shadow-lg transition-all"
-            >
+            <Card onClick={() => onNavigate('user-management')} className="p-6 cursor-pointer hover:shadow-lg transition-all">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
                   <Users className="w-6 h-6 text-[#2563EB]" />
@@ -271,10 +270,7 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
               </div>
             </Card>
 
-            <Card 
-              onClick={() => onNavigate('reports')}
-              className="p-6 cursor-pointer hover:shadow-lg transition-all"
-            >
+            <Card onClick={() => onNavigate('reports')} className="p-6 cursor-pointer hover:shadow-lg transition-all">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center">
                   <Calendar className="w-6 h-6 text-gray-600" />
@@ -288,6 +284,43 @@ export function AdminDashboard({ user, onNavigate, onLogout }: AdminDashboardPro
           </div>
         </div>
       </div>
+
+      {/* 🔒 SECURITY ENTRY MODAL */}
+      {showSecurityModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <Lock className="w-5 h-5 text-red-600" /> Security Check
+              </h3>
+              <button onClick={() => setShowSecurityModal(false)}><X className="w-5 h-5 text-gray-400" /></button>
+            </div>
+            
+            <p className="text-gray-500 mb-4 text-sm">
+              This area is restricted to Super Admins. Please enter the master dashboard code to proceed.
+            </p>
+
+            <input
+              type="password"
+              value={securityCode}
+              onChange={(e) => setSecurityCode(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdminPanelAccess()}
+              className="w-full p-3 border-2 border-gray-200 rounded-xl mb-2 focus:border-red-500 focus:outline-none text-center font-mono text-lg tracking-widest"
+              placeholder="••••••••"
+              autoFocus
+            />
+            
+            {securityError && <div className="text-red-600 text-sm font-medium mb-4 text-center">{securityError}</div>}
+
+            <button 
+              onClick={handleAdminPanelAccess}
+              className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-black transition-all"
+            >
+              Verify & Enter
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

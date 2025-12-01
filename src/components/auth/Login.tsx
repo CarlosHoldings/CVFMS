@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Mail, Lock, Eye, EyeOff, AlertTriangle } from 'lucide-react';
-import { User } from '../../types'; // Ensure this path is correct based on your folder structure
-// Firebase Imports
-import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { User } from '../../types'; 
+
+
+import { signInWithEmailAndPassword, signInWithPopup, signOut } from 'firebase/auth'; 
+import { doc, getDoc, setDoc } from 'firebase/firestore'; // Added setDoc
 import { auth, db, googleProvider } from '../../firebase';
 import { sendLoginNotification } from '../../utils/emailService';
+
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -24,24 +26,52 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
   // --- Helper to wait (for retries) ---
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+  // --- 🔄 SELF-HEALING: Restore Deleted Account ---
+  // If Auth exists but DB is gone, re-create the DB record automatically.
+  const restoreUserAccount = async (uid: string, email: string | null, role: string) => {
+    try {
+      await setDoc(doc(db, "users", uid), {
+        uid,
+        email: email || "",
+        role,
+        status: 'active', // Default to active if restoring
+        createdAt: new Date().toISOString(),
+        restoredAt: new Date().toISOString()
+      });
+      return true;
+    } catch (err) {
+      console.error("Failed to restore account:", err);
+      return false;
+    }
+  };
+
   // --- Helper to fetch user details safely with Retry ---
-  const fetchUserDetailsWithRetry = async (uid: string, retries = 3): Promise<User> => {
+  const fetchUserDetailsWithRetry = async (uid: string, email: string | null, retries = 3): Promise<User> => {
     try {
         const userDoc = await getDoc(doc(db, "users", uid));
         
         if (userDoc.exists()) {
           const userData = userDoc.data();
           
-          // Security Check
+          // 🛑 SECURITY CHECK: BAN STATUS
+          if (userData.status === 'banned') {
+              await signOut(auth); 
+              throw new Error("ACCESS DENIED: Your account has been banned by the administrator.");
+          }
+
+          // Security Check: Role Mismatch
           if (userData.role !== loginType) {
+              await signOut(auth);
               throw new Error(`Access Denied: You are a ${userData.role}, but trying to login as ${loginType}.`);
           }
 
           // Driver Checks
           if (loginType === 'driver' && userData.driverStatus === 'pending') {
+              await signOut(auth);
               throw new Error('Your driver account is pending approval.');
           }
           if (loginType === 'driver' && userData.driverStatus === 'rejected') {
+              await signOut(auth);
               throw new Error('Your driver account was rejected.');
           }
 
@@ -54,16 +84,46 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
               ...userData
           } as User;
         } else {
-          throw new Error('Profile not found. Please Register.');
+          // ⚠️ PROFILE MISSING BUT AUTH SUCCESS
+          // This happens when you delete the user from DB but not Auth.
+          // We will attempt to RESTORE the account here.
+          console.log("Profile missing. Attempting auto-restore...");
+          const restored = await restoreUserAccount(uid, email, loginType);
+          
+          if (restored) {
+             // If restore worked, recursively try fetching again immediately
+             return fetchUserDetailsWithRetry(uid, email, retries); 
+          }
+
+          await signOut(auth);
+          throw new Error('Profile not found and could not be restored.');
         }
     } catch (err: any) {
+        // Retry logic for network issues only
         if (retries > 0 && (err.message?.includes("offline") || err.code === 'unavailable')) {
             await delay(1000); 
-            return fetchUserDetailsWithRetry(uid, retries - 1);
+            return fetchUserDetailsWithRetry(uid, email, retries - 1);
         }
         throw err;
     }
   };
+
+  // 🛑 AUTOMATIC BAN CHECK ON MOUNT
+  useEffect(() => {
+    const checkCurrentStatus = async () => {
+        if (auth.currentUser) {
+            try {
+                await fetchUserDetailsWithRetry(auth.currentUser.uid, auth.currentUser.email);
+            } catch (err: any) {
+                console.log("Auto-login validation failed:", err.message);
+                if (err.message.includes("ACCESS DENIED")) {
+                    setError(err.message);
+                }
+            }
+        }
+    };
+    checkCurrentStatus();
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,16 +132,18 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
 
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const appUser = await fetchUserDetailsWithRetry(userCredential.user.uid);
+      // Pass Email to fetch function for potential restoration
+      const appUser = await fetchUserDetailsWithRetry(userCredential.user.uid, userCredential.user.email);
       
-      // Send Email Notification
-      console.log("Sending login email to:", appUser.email); // Debug log
+      console.log("Sending login email to:", appUser.email); 
       await sendLoginNotification(appUser.email, appUser.name);
       
       onLogin(appUser);
 
     } catch (err: any) {
       console.error("Login Error:", err);
+      if (auth.currentUser) await signOut(auth);
+
       if (err.code === 'auth/invalid-credential') setError('Invalid email or password.');
       else if (err.code === 'auth/too-many-requests') setError('Too many failed attempts. Wait 5 mins.');
       else setError(err.message || 'Login failed.');
@@ -96,13 +158,15 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
 
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      const appUser = await fetchUserDetailsWithRetry(result.user.uid);
+      const appUser = await fetchUserDetailsWithRetry(result.user.uid, result.user.email);
       
-      console.log("Sending Google login email to:", appUser.email); // Debug log
+      console.log("Sending Google login email to:", appUser.email); 
       await sendLoginNotification(appUser.email, appUser.name);
       
       onLogin(appUser);
     } catch (err: any) {
+      if (auth.currentUser) await signOut(auth);
+
       if (err.code === 'auth/popup-closed-by-user') setError('Sign-in cancelled.');
       else setError(err.message || 'Google sign-in failed.');
     } finally {
@@ -116,13 +180,12 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
       <div className="bg-white border-b border-gray-200 py-6 px-4 sm:px-6">
         <div className="max-w-md mx-auto flex flex-col items-center justify-center gap-3 text-center">
           
-          {/* LOGO IMAGE */}
           <img 
             src="/report-header.jpg" 
             alt="Transport System" 
             className="h-16 w-auto object-contain" 
             onError={(e) => {
-                console.warn("Logo image failed to load"); // Debug log
+                console.warn("Logo image failed to load"); 
                 e.currentTarget.style.display = 'none';
             }}
           />
@@ -144,7 +207,11 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
             </div>
 
             {error && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg flex items-start gap-2">
+              <div className={`mb-4 p-3 border text-sm rounded-lg flex items-start gap-2 ${
+                  error.includes("ACCESS DENIED") 
+                  ? "bg-red-100 border-red-200 text-red-800" 
+                  : "bg-red-50 border-red-200 text-red-600"
+              }`}>
                 <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                 <div>{error}</div>
               </div>

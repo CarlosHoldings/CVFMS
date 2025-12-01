@@ -15,6 +15,8 @@ import { BookVehicle } from './components/user/BookVehicle';
 import { ViewTrip } from './components/user/ViewTrip';
 import { DriverTripDetail } from './components/driver/DriverTripDetail';
 import { TripHistory } from './components/shared/TripHistory';
+// Inside App.tsx imports
+import { AdminManagement } from './components/admin/AdminManagement'; 
 
 import { InstallPrompt } from './components/shared/InstallPrompt';
 
@@ -125,6 +127,8 @@ function App() {
         return <Reports user={user} onNavigate={handleNavigate} onLogout={handleLogout} />;
       case 'trip-history':
         return <TripHistory user={user} onNavigate={handleNavigate} onLogout={handleLogout} />;
+      case 'admin-management':
+       return (<AdminManagement user={user} onNavigate={setCurrentScreen} onLogout={handleLogout} />);
       default:
         return <AdminDashboard user={user} onNavigate={handleNavigate} onLogout={handleLogout} />;
     }
@@ -153,6 +157,8 @@ function App() {
     default:
       return <UserDashboard user={user} onNavigate={handleNavigate} onLogout={handleLogout} />;
   }
+
+  
 }
 
 export default App;
