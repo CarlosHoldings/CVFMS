@@ -170,7 +170,8 @@ export function Login({ onLogin, onNavigate }: LoginProps) {
         <div className="flex justify-center mb-4">
              <img src="/report-header.jpg" alt="Logo" className="h-16 object-contain" onError={(e) => e.currentTarget.style.display='none'} />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-2 text-center">Transport System</h1>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2 text-center">Carlos Vehicle Fleet Management System</h1>
+        <h3 className="text-2xl font-bold text-gray-900 mb-2 text-center">(CVFMS)</h3>
         <p className="text-gray-600 mb-6 text-center">Sign in to access dashboard</p>
 
         {error && (
