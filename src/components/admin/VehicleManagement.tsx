@@ -39,14 +39,20 @@ interface VehicleManagementProps {
 }
 
 // --- PDF Image Helper (Retained) ---
+// --- PDF Image Helper (Retained) ---
 const loadBase64Image = async (url: string): Promise<{ data: string; width: number; height: number; type: string } | null> => {
-    try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("Image not found or network error.");
-        
-        const blob = await response.blob();
-        const type = url.endsWith('.png') ? 'PNG' : 'JPEG';
-        
+     try {
+       const response = await fetch(url);
+           if (!response.ok) throw new Error("Image not found or network error.");
+
+                const blob = await response.blob();
+ // Fix: Correctly determine the image type for both .png and .jpg/jpeg
+       const type = url.endsWith('.png') ? 'PNG' : (url.endsWith('.jpg') || url.endsWith('.jpeg') ? 'JPEG' : 'UNKNOWN');
+
+         if (type === 'UNKNOWN') {
+            throw new Error("Unsupported image format.");
+          }
+
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -231,7 +237,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
         setLoading(true);
         
         // --- Image Loading (Errors handled by .catch) ---
-        loadBase64Image('/report-header.png').then(data => { setHeaderImageData(data); }).catch(e => console.error("Header image loading error:", e));
+        loadBase64Image('/report-header.jpg').then(data => { setHeaderImageData(data); }).catch(e => console.error("Header image loading error:", e));
         loadBase64Image('/report-footer.png').then(data => { setFooterImageData(data); }).catch(e => console.error("Footer image loading error:", e));
         
         
@@ -1183,7 +1189,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
                         
                         <div className="flex gap-3 mt-6">
                             <button onClick={() => setShowLicenseModal(false)} className="flex-1 py-3 border rounded-xl">Cancel</button>
-                            <button onClick={handleRenewLicense} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl">Save Renewal Details</button>
+                            <button onClick={handleRenewLicense} className="flex-1 py-3 bg-green-600 text-white rounded-xl">Save Renewal Details</button>
                         </div>
                     </Card>
                 </div>
@@ -1219,7 +1225,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
                             <button 
                                 onClick={handleGenerateFilteredReport} 
                                 disabled={!reportSections.repair && !reportSections.service && !reportSections.fuel && !reportSections.license}
-                                className="flex-1 py-3 bg-blue-600 text-white rounded-xl disabled:opacity-50"
+                                className="flex-1 py-3 bg-green-600 text-white rounded-xl disabled:opacity-50"
                             >
                                 Generate PDF
                             </button>
@@ -1243,7 +1249,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
                         </div>
                         <div className="flex gap-3 mt-6">
                             <button onClick={() => setShowFuelLogModal(false)} className="flex-1 py-3 border rounded-xl">Cancel</button>
-                            <button onClick={handleLogFuel} className="flex-1 py-3 bg-yellow-600 text-white rounded-xl">Save Fuel Log</button>
+                            <button onClick={handleLogFuel} className="flex-1 py-3 bg-green-600 text-white rounded-xl">Save Fuel Log</button>
                         </div>
                     </Card>
                 </div>
@@ -1429,7 +1435,7 @@ export function VehicleManagement({ user, onNavigate, onLogout }: VehicleManagem
                         <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50">Cancel</button>
                         <button 
                             onClick={handleSubmitVehicle} 
-                            className="flex-1 py-3 bg-blue-600 text-gray-700 text-white font-medium rounded-xl hover:bg-blue-700 shadow-sm"
+                            className="flex-1 py-3 bg-green-600 text-gray-700 text-white font-medium rounded-xl hover:bg-blue-700 shadow-sm"
                         >
                             {isEditing ? 'Update Vehicle' : 'Save Vehicle'}
                         </button>
