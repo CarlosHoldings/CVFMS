@@ -251,47 +251,45 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         setLocationSuggestions([]);
     };
 
-    const handleUseGPS = async () => {
-        if (!driverLocation) {
-            alert("GPS location unavailable or still fetching.");
-            return;
-        }
+    const handleUseGPS = () => {
+    if (navigator.geolocation) {
         setGpsLoading(true);
+        // Request fresh location data directly inside the handler
+        navigator.geolocation.getCurrentPosition(
+            async (position) => {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                
+                try {
+                    // Use your mock function to simulate reverse geocoding lookup
+                    const address = await mockReverseGeocode(lat, lng);
+                    
+                    // 1. Update the address input state
+                    setBreakdownAddress(address); 
+                    
+                    alert("GPS location successfully resolved to an address.");
 
-        const { lat, lng } = driverLocation;
-
-        try {
-             // ⭐️ CRITICAL FIX: Use the mock reverse geocoder instead of just showing coordinates
-             const address = await mockReverseGeocode(lat, lng);
-             setBreakdownAddress(address);
-
-        } catch (error) {
-             console.error("Reverse Geocoding Error:", error);
-             // Fallback to coordinates on error
-             setBreakdownAddress(`ERROR: Could not fetch address. GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-             alert("Failed to get address from GPS. Please enter manually.");
-        } finally {
-             setGpsLoading(false);
-             setLocationSuggestions([]);
-        }
-    };
-
-    const selectSuggestion = (place: any) => {
-        if (activeSearchIndex === null) return;
-        const lat = parseFloat(place.lat);
-        const lng = parseFloat(place.lon);
-        const displayName = place.display_name;
-
-        if (activeSearchIndex === 'pickup') {
-            setPickup({ address: displayName, coords: { lat, lng } });
-            recalculateTotalRoute({ lat, lng }, stops);
-        } else {
-            updateStop(activeSearchIndex as number, displayName, { lat, lng });
-        }
-        setMapCenter([lat, lng]);
-        setSuggestions([]);
-        setActiveSearchIndex(null);
-    };
+                } catch (error) {
+                    console.error("Reverse Geocoding Error:", error);
+                    // 2. Fallback if reverse lookup fails
+                    setBreakdownAddress(`GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+                    alert("Failed to get readable address from GPS. Raw coordinates captured.");
+                } finally {
+                    setGpsLoading(false);
+                }
+            },
+            (error) => {
+                console.warn(`Geolocation error: ${error.message}`);
+                setBreakdownAddress('GPS location unavailable.');
+                setGpsLoading(false);
+                alert(`GPS Error: ${error.message}`);
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+    } else {
+        alert("Geolocation not supported by this device/browser.");
+    }
+};
 
     // --- END LOCATION HANDLERS ---
     
