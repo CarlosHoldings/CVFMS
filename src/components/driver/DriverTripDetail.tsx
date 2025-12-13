@@ -14,23 +14,84 @@ import { doc, getDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { logAction } from '../../utils/auditLogger'; 
 
-// --- ASYNC HELPERS (MOCK IMPLEMENTATIONS RETAINED FOR COMPILATION) ---
-const getMapRouteDistanceKm = async (locations: string[]): Promise<number> => { return locations.length * 50; };
+// --- ASYNC HELPERS (MOCK FUNCTIONS RETAINED FOR COMPILATION) ---
+const getMapRouteDistanceKm = async (locations: string[]): Promise<number> => { return 0; };
 const calculateOriginalVehicleDistance = async (trip: any): Promise<number> => { return 0; };
 const calculateRemainingDistanceKm = async (trip: any, newStartPlace: string): Promise<number> => { return 0; };
 
+// ⭐️ NEW MOCK: Simulates calling a Reverse Geocoding API to get a place name from GPS
+const mockReverseGeocode = async (lat: number, lng: number): Promise<string> => {
+    // Simulate API delay
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    // In a real app, this would be a fetch call to Google Maps, Nominatim, etc.
+    // Example logic based on coordinates:
+    if (lat > 6.90 && lat < 7.00) {
+        return "Near Colombo Port City, Sri Lanka";
+    } else if (lat > 6.00 && lat < 6.10) {
+        return "Near Galle Fort Entrance, Southern Province";
+    }
+    
+    // Default fallback address for general mock location
+    return `Main Road, Intersection near Bridge (Simulated Address from GPS: ${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+};
+
+
+
 // Helper to determine if a trip date is exactly today
 const isToday = (dateString: string) => {
+    // Current time is 2025-12-10 4:13 PM. trip.date is 2025-12-10. This should be true.
     const tripDateTime = new Date(dateString).setHours(0, 0, 0, 0);
     const today = new Date().setHours(0, 0, 0, 0);
     return tripDateTime === today;
 };
 
-// 🚨 GPS Hook: Uses a simulated location for the development environment.
+// 🚨 GPS Hook: Uses real browser API (RETAINED)
 const useDriverGPS = () => {
     const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
-    useEffect(() => { setLocation({ lat: 6.9271, lng: 79.8612 }); return () => {}; }, []); 
+    
+    useEffect(() => {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    setLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+                },
+                (error) => {
+                    console.warn(`Geolocation error: ${error.message}`);
+                    setLocation(null); 
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        }
+        return () => { /* Cleanup if necessary */ };
+    }, []); 
+    
     return location;
+
+    useEffect(() => {
+        const resolveBreakdownLocation = async () => {
+            // Check if the trip is reassigned AND we only have raw GPS coordinates
+            if (trip && trip.status === 'reassigned' && !trip.breakdownLocation && trip.breakdownGPS) {
+                const [latStr, lngStr] = trip.breakdownGPS.split(',');
+                const lat = parseFloat(latStr);
+                const lng = parseFloat(lngStr);
+
+                if (!isNaN(lat) && !isNaN(lng)) {
+                    try {
+                        const address = await mockReverseGeocode(lat, lng);
+                        setReadableBreakdownAddress(address);
+                    } catch (error) {
+                        console.error("Failed to reverse geocode breakdown GPS:", error);
+                        setReadableBreakdownAddress(`GPS: ${trip.breakdownGPS}`); // Fallback
+                    }
+                }
+            }
+        };
+
+        if (trip) {
+            resolveBreakdownLocation();
+        }
+    }, [trip]);
 };
 
 interface DriverTripDetailProps {
@@ -38,34 +99,30 @@ interface DriverTripDetailProps {
     tripId: string | null;
     onNavigate: (screen: string) => void;
     onLogout: () => void;
+    startWithFineClaim?: boolean;
 }
 
-// Helper Component for Collapsible Stops (REFINED STYLES)
+// Helper Component for Collapsible Stops (RETAINED)
 const DriverStopList = ({ destinations, finalDestination }: { destinations?: string[], finalDestination: string }) => {
     const [expanded, setExpanded] = useState(false);
     
-    // Ensure the destinations array is safe to iterate
     const validDestinations = destinations?.filter(d => d && d.trim()) || [];
     
-    // Fallback display for zero stops (Only the final destination)
     if (validDestinations.length === 0) {
       return (
-            <div className="flex gap-4 items-start py-2">
-             <div className="w-3 h-3 bg-red-500 rounded-full flex-shrink-0 mt-2"/>
-             <div>
-                 <div className="text-xs text-gray-500 uppercase">Drop-off</div>
-                 <div className="text-gray-900 font-medium">{finalDestination}</div>
+             <div className="flex gap-4 items-start py-2">
+                <div className="w-3 h-3 bg-red-500 rounded-full flex-shrink-0 mt-2"/>
+                <div>
+                    <div className="text-xs text-gray-500 uppercase">Drop-off</div>
+                    <div className="text-gray-900 font-medium">{finalDestination}</div>
+                </div>
              </div>
-            </div>
       );
     }
     
-    // All points including the final drop-off
     const allPoints = [...validDestinations, finalDestination];
 
-    // Component for a single stop row
     const StopRow = ({ stopName, index, isFinal, isHidden }: { stopName: string, index: number, isFinal: boolean, isHidden: boolean }) => {
-        const isMiddleStop = index > 0 && index < allPoints.length - 1;
         const stopLabel = index === allPoints.length - 1 
             ? 'Drop-off' 
             : index === 0 
@@ -90,7 +147,6 @@ const DriverStopList = ({ destinations, finalDestination }: { destinations?: str
 
     return (
         <div className="space-y-1">
-            {/* First Stop (Pickup is assumed before the list starts in the parent component) */}
             {validDestinations.length > 0 && (
                 <StopRow 
                     stopName={validDestinations[0]} 
@@ -100,18 +156,16 @@ const DriverStopList = ({ destinations, finalDestination }: { destinations?: str
                 />
             )}
             
-            {/* Render rest of stops if expanded */}
             {validDestinations.slice(1).map((stop, index) => (
                 <StopRow 
                     key={`stop-${index + 1}`}
                     stopName={stop} 
-                    index={index + 1} // Actual index starts from 1 (Stop 2)
+                    index={index + 1}
                     isFinal={false} 
                     isHidden={!expanded}
                 />
             ))}
             
-            {/* Toggle Button */}
             {validDestinations.length > 1 && (
                 <div className="flex justify-start my-2 ml-7">
                     <button 
@@ -124,10 +178,9 @@ const DriverStopList = ({ destinations, finalDestination }: { destinations?: str
                 </div>
             )}
             
-            {/* Final Drop-off */}
             <StopRow 
                 stopName={finalDestination} 
-                index={validDestinations.length} // Index is length of destinations array
+                index={validDestinations.length}
                 isFinal={true} 
                 isHidden={false}
             />
@@ -141,7 +194,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
     const [loading, setLoading] = useState(true);
     const [showSummary, setShowSummary] = useState(false);
     
-    // Odometer Modal State
+    // Odometer Modal State (RETAINED)
     const [showOdometerModal, setShowOdometerModal] = useState(false);
     const [odometerInput, setOdometerInput] = useState('');
     const [modalActionType, setModalActionType] = useState<'start' | 'end' | null>(null);
@@ -154,8 +207,10 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
     const [breakdownAddress, setBreakdownAddress] = useState('');
     const [locationSuggestions, setLocationSuggestions] = useState<any[]>([]); 
     const [gpsLoading, setGpsLoading] = useState(false); 
+    const [readableBreakdownAddress, setReadableBreakdownAddress] = useState<string | null>(null);
     
-    // Fine Claim Modal state
+    
+    // Fine Claim Modal state (RETAINED)
     const [showFineClaimModal, setShowFineClaimModal] = useState(false);
     const [fineClaimData, setFineClaimData] = useState({
         fineDate: new Date().toISOString().split('T')[0], 
@@ -166,6 +221,8 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         photoUrl: '' 
     });
 
+    const [activeSearchIndex, setActiveSearchIndex] = useState<number | 'pickup' | null>(null);
+
 
     const driverLocation = useDriverGPS();
 
@@ -173,31 +230,20 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
     const allTripStops = useMemo(() => {
         return trip ? [
             trip.pickup, 
-            ...(trip.destinations?.filter((d: string) => d && d.trim()) || []), // Filter out empty destinations
-            trip.destination // Include final drop-off
+            ...(trip.destinations?.filter((d: string) => d && d.trim()) || []), 
+            trip.destination 
         ] : [];
     }, [trip]);
 
 
-    // --- 🎯 CORRECTED LOCATION HANDLERS for Breakdown Modal ---
+    // --- LOCATION HANDLERS for Breakdown Modal --- (UPDATED)
     const handleLocationSearch = async (query: string) => {
         setBreakdownAddress(query);
         if (query.length < 3) { setLocationSuggestions([]); return; }
         
-        const lowerQuery = query.toLowerCase();
-        // Mocked results
-        const specialMatches = [
-            { display_name: "Carlos Embellishers (Pvt) Ltd - Veyangoda (Head Office)", lat: 7.1667, lon: 80.0500 },
-            { display_name: "Eskimo Fashion Knitwear - Negombo (Main)", lat: 7.2008, lon: 79.8737 },
-        ].filter(loc => loc.display_name.toLowerCase().includes(lowerQuery));
-
-        let apiMatches: any[] = [];
-        try {
-            // MOCK: API call to Nominatim
-            apiMatches = [{ display_name: `${query} Address 1 (MOCK)`, lat: 6.9, lon: 79.8 }, { display_name: `${query} Warehouse (MOCK)`, lat: 6.95, lon: 79.9 }];
-        } catch (e) { console.error("Location search failed", e); }
-        
-        setLocationSuggestions([...specialMatches, ...apiMatches]);
+        // **PRODUCTION NOTE:** Replace with real geocoding API call
+        // For this mock, we clear suggestions as we only use GPS
+        setLocationSuggestions([]); 
     };
     
     const handleSelectLocation = (address: string) => {
@@ -212,35 +258,46 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         }
         setGpsLoading(true);
 
-        const resolveAddress = (lat: number, lng: number, isReal: boolean) => {
-            // MOCK: Reverse geocoding
-            const address = isReal 
-                ? `Current GPS Location (${lat.toFixed(4)})` 
-                : `Simulated Handover Point (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
-            setBreakdownAddress(address);
-            setGpsLoading(false);
-            setLocationSuggestions([]);
-        };
+        const { lat, lng } = driverLocation;
 
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    resolveAddress(position.coords.latitude, position.coords.longitude, true);
-                },
-                (error) => {
-                    alert("GPS Error: " + error.message);
-                    resolveAddress(driverLocation.lat, driverLocation.lng, false); // Fallback to hook location
-                },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-            );
-        } else {
-            resolveAddress(driverLocation.lat, driverLocation.lng, false); // Fallback for simulated hook location
+        try {
+             // ⭐️ CRITICAL FIX: Use the mock reverse geocoder instead of just showing coordinates
+             const address = await mockReverseGeocode(lat, lng);
+             setBreakdownAddress(address);
+
+        } catch (error) {
+             console.error("Reverse Geocoding Error:", error);
+             // Fallback to coordinates on error
+             setBreakdownAddress(`ERROR: Could not fetch address. GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+             alert("Failed to get address from GPS. Please enter manually.");
+        } finally {
+             setGpsLoading(false);
+             setLocationSuggestions([]);
         }
     };
-    // --- END CORRECTED LOCATION HANDLERS ---
+
+    const selectSuggestion = (place: any) => {
+        if (activeSearchIndex === null) return;
+        const lat = parseFloat(place.lat);
+        const lng = parseFloat(place.lon);
+        const displayName = place.display_name;
+
+        if (activeSearchIndex === 'pickup') {
+            setPickup({ address: displayName, coords: { lat, lng } });
+            recalculateTotalRoute({ lat, lng }, stops);
+        } else {
+            updateStop(activeSearchIndex as number, displayName, { lat, lng });
+        }
+        setMapCenter([lat, lng]);
+        setSuggestions([]);
+        setActiveSearchIndex(null);
+    };
+
+    // --- END LOCATION HANDLERS ---
+    
 
 
-    // 1. Fetch Trip Data 
+    // 1. Fetch Trip Data (RETAINED)
     useEffect(() => {
         const fetchTrip = async () => {
             if (!tripId) return;
@@ -266,13 +323,16 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                         const driverSnap = await getDoc(doc(db, "users", data.originalDriverId));
                         if (driverSnap.exists()) {
                             const driverData = driverSnap.data();
-                            data = { ...data, originalDriverName: driverData.fullName, originalDriverPhone: driverData.phone };
+                            data = { 
+                                ...data, 
+                                originalDriverName: driverData.fullName, 
+                                originalDriverPhone: driverData.phone 
+                            };
                         }
                     }
 
                     setTrip(data);
                     
-                    // 🚨 FIX 1: Show summary ONLY for terminal states
                     if (['completed', 'broken-down', 'cancelled', 'rejected'].includes(data.status)) {
                         setShowSummary(true);
                     } else {
@@ -292,7 +352,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         fetchTrip();
     }, [tripId, onNavigate, user.id]);
 
-    // 2. Handlers
+    // 2. Handlers (RETAINED)
     const handleStartTripClick = () => {
         setOdometerInput(trip?.odometerStart || '');
         setModalActionType('start');
@@ -305,7 +365,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         setShowOdometerModal(true);
     };
     
-    // Submits Odometer and updates trip status
+    // Submits Odometer and updates trip status (RETAINED)
     const handleSubmitOdometer = async () => {
         if (!trip || !odometerInput) { alert("Odometer reading required."); return; }
         const odometer = Number(odometerInput);
@@ -316,8 +376,8 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
             
             if (modalActionType === 'start') {
                 if (odometer <= (trip.odometerEndPrevious || 0) && trip.odometerEndPrevious > 0) {
-                     alert(`Error: Start Odometer (${odometer}) cannot be less than or equal to the last recorded End Odometer (${trip.odometerEndPrevious}).`);
-                     return;
+                    alert(`Error: Start Odometer (${odometer}) cannot be less than or equal to the last recorded End Odometer (${trip.odometerEndPrevious}).`);
+                    return;
                 }
                 
                 await updateDoc(tripRef, {
@@ -353,10 +413,9 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                 
                 setTrip((prev: any) => ({ ...prev, status: 'completed', odometerEnd: odometer, kmRun: distanceRun }));
                 
-                // 💥 FIX 2: Upon successful trip completion, close Odometer modal, show Summary, and prompt for Fine Claim 💥
                 setShowOdometerModal(false); 
                 setShowSummary(true);
-                setShowFineClaimModal(true); 
+                //setShowFineClaimModal(true); 
                 return; 
             }
             
@@ -370,7 +429,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         }
     };
 
-    // Breakdown/Cancel Trip
+    // Breakdown/Cancel Trip (RETAINED)
     const handleReportBreakdown = async () => {
         if (!trip || !breakdownReason.trim() || !breakdownOdometer || !lastVisitedStop || !breakdownAddress) {
           alert("Please provide all required breakdown details.");
@@ -388,23 +447,30 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         const confirmStop = window.confirm(`Confirm breakdown for ${trip.vehicleNumber}? This will halt the trip and notify admin for reassignment/maintenance.`);
         if (!confirmStop) return;
 
-        try {
-          const tripRef = doc(db, "trip_requests", trip.id);
-          
-          const breakdownLocationGPS = `${driverLocation.lat},${driverLocation.lng}`;
-          
-          // 1. Update Trip Status
-          await updateDoc(tripRef, {
-            status: 'broken-down', 
-            cancelledAt: new Date().toISOString(),
-            breakdownReason: breakdownReason, 
-            breakdownLocation: breakdownAddress, 
-            breakdownGPS: breakdownLocationGPS, 
-            breakdownOdometer: Number(breakdownOdometer), 
-            lastVisitedStop: lastVisitedStop, 
-            // Store the current Odometer reading to be used as 'odometerEndPrevious' for the next driver
-            odometerEndPrevious: Number(breakdownOdometer)
-          });
+        // DriverTripDetail.tsx (Inside handleReportBreakdown)
+
+        
+        try {
+          const tripRef = doc(db, "trip_requests", trip.id);
+          
+          // 1. Store raw GPS coordinates here
+          const breakdownLocationGPS = driverLocation ? `${driverLocation.lat},${driverLocation.lng}` : 'N/A';
+
+          // The definition of originalBreakdownDisplay is only for logging/local UI update, can be removed 
+            // from here as it's defined globally later, but let's keep the logic clean:
+          
+          // 1. Update Trip Status (Use the correct variables)
+          await updateDoc(tripRef, {
+            status: 'broken-down', 
+            cancelledAt: new Date().toISOString(),
+            breakdownReason: breakdownReason, 
+            breakdownLocation: breakdownAddress, // Stores readable address (e.g., "Near Colombo Port City...")
+            breakdownGPS: breakdownLocationGPS, // 🔥 FIX: Stores raw coordinates (e.g., "6.9271,79.8612")
+            breakdownOdometer: Number(breakdownOdometer), 
+            lastVisitedStop: lastVisitedStop, 
+            odometerEndPrevious: Number(breakdownOdometer)
+          });
+// ...
 
           // 2. Update Vehicle Status for maintenance
           if (trip.vehicleId) {
@@ -421,9 +487,9 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
 
           // 4. Log the action for admin
           await logAction(user.email, 'BREAKDOWN_REPORTED',
-                `Driver reported breakdown for ${trip.vehicleNumber} during trip #${trip.serialNumber}. Reason: ${breakdownReason}. Stop: ${lastVisitedStop}`,
-                { tripId: trip.id, breakdownLocation: breakdownAddress }
-           );
+              `Driver reported breakdown for ${trip.vehicleNumber} during trip #${trip.serialNumber}. Reason: ${breakdownReason}. Stop: ${lastVisitedStop}`,
+              { tripId: trip.id, breakdownLocation: breakdownAddress }
+             );
           
           // 5. Update UI
           setTrip((prev: any) => ({ 
@@ -442,7 +508,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
         }
     };
     
-    // Submit Police Fine Claim
+    // Submit Police Fine Claim (RETAINED)
     const handleReportFine = async () => {
         if (!fineClaimData.policeStationPlace || !fineClaimData.amount || !fineClaimData.reason || !fineClaimData.fineDate) {
             alert("Please fill in the fine date, police station/place, reason, and amount of the fine.");
@@ -489,13 +555,35 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
     if (!trip) return <div className="p-10 text-center text-red-600 font-medium">Trip not found or ID is missing.</div>;
 
     const isTripCompleted = trip.status === 'completed';
-    const isReadyToStart = (trip.status === 'approved' || trip.status === 'reassigned') && !trip.odometerStart && isToday(trip.date);
     const isTripActive = trip.status === 'in-progress';
+    
+    // 🎯 Start Button Logic: Allow start immediately if reassigned and odometer not set.
+    const isReadyToStart = 
+        (!trip.odometerStart) && 
+        (
+            (trip.status === 'approved' && isToday(trip.date)) || 
+            (trip.status === 'reassigned') 
+        );
+
 
     // Determine the pickup location for the route overview
-    const effectivePickup = trip.status === 'reassigned' && trip.breakdownLocation 
-                               ? trip.breakdownLocation 
-                               : trip.pickup;
+    // 🎯 Use breakdownLocation if available and trip is reassigned
+
+        // Determine the pickup location for the route overview
+                const effectivePickup = readableBreakdownAddress // 👈 Use the newly resolved address first
+                    ? readableBreakdownAddress
+                    : (trip.status === 'reassigned' && (trip.breakdownLocation || trip.breakdownGPS)) 
+                        ? (trip.breakdownLocation || `GPS: ${trip.breakdownGPS}`)
+                        : trip.pickup;
+    
+    // Get the display location for the Reassignment Info Card
+    // DriverTripDetail.tsx (Global variable around line 431)
+// Get the display location for the Reassignment Info Card
+                const originalBreakdownDisplay = readableBreakdownAddress // 👈 Use the newly resolved address first
+                    ? readableBreakdownAddress
+                    : (trip.breakdownLocation 
+                        ? trip.breakdownLocation 
+                        : (trip.breakdownGPS ? `GPS: ${trip.breakdownGPS}` : 'N/A'));
 
 
     return (
@@ -503,7 +591,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
             <TopNav user={user} onNavigate={onNavigate} onLogout={onLogout} />
             <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 
-                {/* Header and Status */}
+                {/* Header and Status (RETAINED) */}
                 <div className="mb-6">
                     <button onClick={() => onNavigate('driver-dashboard')} className="text-blue-600 mb-4 font-medium hover:text-blue-800 transition-colors flex items-center gap-1">
                         <ArrowLeft className='w-4 h-4' /> Back to Dashboard
@@ -521,10 +609,10 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                     )}
                 </div>
                 
-                {/* --- Main Content Layout --- */}
+                {/* --- Main Content Layout --- (RETAINED)*/}
                 <div className='lg:flex lg:gap-8'>
                     
-                    {/* Left Column: Route Details and Odometer */}
+                    {/* Left Column: Route Details and Odometer (RETAINED) */}
                     <div className="lg:flex-1 space-y-6">
                         
                         {/* Route Details Card */}
@@ -573,7 +661,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                         
                     </div>
                     
-                    {/* Right Column: Customer and Actions */}
+                    {/* Right Column: Customer and Actions (RETAINED) */}
                     <div className="lg:w-1/3 mt-6 lg:mt-0 space-y-6">
                         
                         {/* Customer Card */}
@@ -582,7 +670,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                             <div className="flex items-center gap-4 mb-4">
                                 <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center"><UserIcon className="w-6 h-6 text-blue-600"/></div>
                                 <div>
-                                    <div className="font-bold text-gray-900">{trip.customer || trip.customerName}</div>
+                                    <div className="font-bold text-gray-900">{trip.customer || trip.customerName || 'N/A'}</div>
                                     <div className="text-sm text-gray-500">{trip.epf || trip.epfNumber || 'N/A'}</div>
                                 </div>
                             </div>
@@ -590,15 +678,38 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                 href={`tel:${trip.customerPhone || trip.phone}`} 
                                 className="flex items-center justify-center gap-2 w-full py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-all font-medium"
                             >
-                                <Phone className="w-4 h-4"/> Call Customer
+                                <Phone className="w-4 h-4"/> Call Customer ({trip.customerPhone || trip.phone || 'N/A'})
                             </a>
                         </Card>
+
+                        {/* Breakdown Information Card */}
+                        {(trip.status === 'reassigned' || trip.status === 'broken-down') && trip.originalVehicleNumber && (
+                             <Card className="p-6 border-l-4 border-yellow-500 bg-yellow-50">
+                                 <h2 className="text-xl font-bold mb-4 text-yellow-800 flex items-center gap-2"><Car className='w-5 h-5'/> Reassignment Info</h2>
+                                 <div className='space-y-3 text-sm'>
+                                     <div>
+                                         <p className="text-xs text-gray-600 uppercase font-semibold">Original Vehicle</p>
+                                         <p className="font-bold text-gray-900">{trip.originalVehicleNumber || 'N/A'}</p>
+                                     </div>
+                                     <div>
+                                         <p className="text-xs text-gray-600 uppercase font-semibold">Previous Driver</p>
+                                         <p className="font-bold text-gray-900">{trip.originalDriverName || 'N/A'}</p>
+                                         <p className="text-xs text-gray-700 flex items-center gap-1"><PhoneIcon className='w-3 h-3'/> {trip.originalDriverPhone || 'N/A'}</p>
+                                     </div>
+                                     <div className='pt-2 border-t border-yellow-200'>
+                                         <p className="text-xs text-red-600 font-semibold uppercase">Original Breakdown Location</p>
+                                         <p className="text-gray-900">{originalBreakdownDisplay}</p>
+                                     </div>
+                                 </div>
+                             </Card>
+                        )}
 
                         {/* Actions Card */}
                         {!showSummary && (
                             <Card className="p-6 space-y-4">
                                 <h2 className="text-xl font-bold text-gray-800">Trip Actions</h2>
                                 
+                                {/* 🎯 Start Button visible if ready to start */}
                                 {isReadyToStart && (
                                     <button onClick={handleStartTripClick} className="w-full py-4 bg-green-600 text-white rounded-xl flex justify-center gap-2 hover:bg-green-700 transition-all font-semibold shadow-lg">
                                         <Play className="w-5 h-5" /> Start Trip (Record Odometer)
@@ -621,9 +732,9 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                 
                                 {/* Status Messages */}
                                 {(!isReadyToStart && !isTripCompleted && !isTripActive) && (
-                                     <div className="w-full py-3 bg-gray-100 text-gray-700 rounded-xl flex justify-center text-sm font-medium">
-                                         Awaiting Start Day ({trip.date})
-                                     </div>
+                                    <div className="w-full py-3 bg-gray-100 text-gray-700 rounded-xl flex justify-center text-sm font-medium">
+                                        Awaiting Start Day ({trip.date})
+                                    </div>
                                 )}
                                 
                             </Card>
@@ -632,7 +743,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                     </div>
                 </div>
 
-                {/* --- SUMMARY VIEW (After Completion/Breakdown) --- */}
+                {/* --- SUMMARY VIEW (After Completion/Breakdown) --- (RETAINED) */}
                 {showSummary && (
                     <Card className="p-8 max-w-xl mx-auto mt-8 shadow-2xl">
                         <div className="text-center mb-6">
@@ -651,7 +762,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                             </p>
                         </div>
                         
-                        {/* Summary Details Table (Refined) */}
+                        {/* Summary Details Table (Retained) */}
                         <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6 space-y-2 text-sm">
                             <div className="flex justify-between border-b pb-1">
                                 <span className="text-gray-600 font-medium">Trip:</span>
@@ -680,7 +791,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                             )}
                         </div>
 
-                        {/* Standardized Action Buttons */}
+                        {/* Standardized Action Buttons (Retained) */}
                         <div className="space-y-3">
                             {/* 1. Report Police Fine Button (Primary Action) */}
                             <button 
@@ -691,16 +802,16 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                             </button>
                             
                             {/* 2. Back to Dashboard Button (Secondary Action) */}
-                            <button onClick={handleCompleteSummary} className="w-full py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-semibold shadow-md flex justify-center gap-2 items-center">
+                            <button onClick={handleCompleteSummary} className="w-full py-3 bg-blue-600 text-gray rounded-xl hover:bg-blue-700 font-semibold shadow-md flex justify-center items-center">
                                 <ArrowLeft className="w-5 h-5"/> Finish & Go to Dashboard
                             </button>
                         </div>
                     </Card>
                 )}
                 
-                {/* --- MODALS --- */}
+                {/* --- MODALS --- (RETAINED) */}
 
-                {/* Police Fine Claim Modal */}
+                {/* Police Fine Claim Modal (RETAINED) */}
                 {showFineClaimModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                         <Card className="w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
@@ -785,7 +896,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                     />
                                 </div>
 
-                                {/* 2. Last Place Visited (Improved Select) */}
+                                {/* 2. Last Place Visited (Improved Select) (RETAINED) */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">
                                         Last Place Visited/Nearest Stop: <span className="text-red-500">*</span>
@@ -802,7 +913,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                     </select>
                                 </div>
 
-                                {/* 3. Breakdown Location Address (FIXED for standard UI and Suggestions) */}
+                                {/* 3. Breakdown Location Address (UPDATED) */}
                                 <div className="relative">
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Breakdown Location Address: <span className="text-red-500">*</span></label>
                                     <div className="flex gap-2 w-full items-center">
@@ -817,13 +928,13 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                             type="button" 
                                             onClick={handleUseGPS} 
                                             disabled={gpsLoading || !driverLocation}
-                                            className="p-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 w-12 flex justify-center items-center disabled:opacity-50 transition-colors" 
+                                            className="p-2.5 bg-blue-500 text-blue rounded-lg hover:bg-blue-600 w-12 flex justify-center items-center disabled:opacity-50 transition-colors" 
                                             title="Autofill GPS Location"
                                         >
                                             {gpsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Navigation className="w-5 h-5" />}
                                         </button>
                                     </div>
-                                    {/* Suggestions Dropdown */}
+                                    {/* Suggestions Dropdown (RETAINED, mostly for visual queue) */}
                                     {locationSuggestions.length > 0 && (
                                         <div className="absolute left-0 right-0 bg-white border border-gray-200 rounded-lg mt-1 shadow-xl max-h-48 overflow-y-auto z-10">
                                             {locationSuggestions.map((place, idx) => (
@@ -836,7 +947,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                     )}
                                 </div>
                                 
-                                {/* 4. Reason for Breakdown (Improved Select) */}
+                                {/* 4. Reason for Breakdown (Improved Select) (RETAINED) */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">
                                         Reason for Breakdown: <span className="text-red-500">*</span>
@@ -855,9 +966,10 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                     </select>
                                 </div>
                                 
+                                {/* GPS Location Display (UPDATED to show lat/lng separately) */}
                                 <div className="p-3 bg-blue-50 border border-blue-300 rounded-lg">
                                     <p className="text-sm font-semibold text-blue-700 flex items-center gap-1">
-                                        <MapPin className='w-4 h-4'/> GPS Location Sent to Admin:
+                                        <MapPin className='w-4 h-4'/> Current GPS Coordinates:
                                     </p>
                                     <p className="text-xs text-blue-600 mt-1">{driverLocation ? `${driverLocation.lat.toFixed(4)}, ${driverLocation.lng.toFixed(4)}` : 'Fetching...'}</p>
                                 </div>
@@ -868,7 +980,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                                 <button 
                                     onClick={handleReportBreakdown} 
                                     disabled={!breakdownReason || !driverLocation || !breakdownOdometer || !lastVisitedStop || !breakdownAddress} 
-                                    className="flex-1 py-3 bg-yellow-600 text-white rounded-xl hover:bg-yellow-700 disabled:opacity-50 font-semibold flex justify-center items-center gap-2"
+                                    className="flex-1 py-3 bg-yellow-600 text-black rounded-xl hover:bg-yellow-700 disabled:opacity-50 font-semibold flex justify-center items-center gap-2"
                                 >
                                     <Wrench className="w-5 h-5"/> Confirm Breakdown
                                 </button>
@@ -877,7 +989,7 @@ export function DriverTripDetail({ user, tripId, onNavigate, onLogout }: DriverT
                     </div>
                 )}
                 
-                {/* ODOMETER INPUT MODAL */}
+                {/* ODOMETER INPUT MODAL (Retained) */}
                 {showOdometerModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                         <Card className="w-full max-w-md p-6">

@@ -115,24 +115,27 @@ const generateNextSerialNumber = async (prefix: 'N' | 'B' | 'M'): Promise<string
 // 🌟 NEW PDF HEADER HELPER 🌟
 // Centralized function to add the company logo and report title
 const applyReportHeader = (doc: jsPDF, reportName: string, subTitle?: string, startX: number = 10, startY: number = 10) => {
-    // Image Path (Assuming 'report-header.jpg' is in the public folder)
-    const imgData = 'report-header.jpg'; 
+    // 💥 FIX: Corrected the image path to use the root public path (/)
+    const imgPath = '/report-header.jpg'; 
     const imgWidth = 40; // Smaller logo for trip ticket
     const imgHeight = 20; 
     const pageWidth = doc.internal.pageSize.getWidth();
     const centerOffset = (pageWidth - imgWidth) / 2; 
 
+    let y = startY;
+
     // Add Logo (Centrally aligned)
     try {
-        doc.addImage(imgData, 'JPEG', centerOffset, startY, imgWidth, imgHeight); 
+        // Use doc.addImage with the public path for the image
+        doc.addImage(imgPath, 'JPEG', centerOffset, y, imgWidth, imgHeight); 
     } catch (e) {
         // Fallback text if image fails to load/render
         doc.setFontSize(8);
         doc.setFont(undefined, 'bold');
-        doc.text("Company Logo Placeholder", centerOffset, startY + 5);
+        doc.text("Company Logo Placeholder", centerOffset, y + 5, { align: 'center' });
     }
 
-    let y = startY + imgHeight + 5; 
+    y += imgHeight + 5; 
     
     doc.setFontSize(14);
     doc.setFont(undefined, 'bold');
@@ -154,9 +157,14 @@ const generateTripTicketHalfA4PDF = async (trip: any, adminUser: User) => {
     const doc = new jsPDF('p', 'mm', [105, 148]); // Half A4 Size (A6 is too small)
     const marginX = 5;
     const pageWidth = doc.internal.pageSize.getWidth();
-
+    
+    const isReassignedTrip = trip.status === 'reassigned';
+    
+    // Determine report title based on trip type
+    const reportTitle = isReassignedTrip ? "Breakdown Reassignment Ticket" : "Official Trip Ticket";
+    
     // 🌟 Apply Header 🌟
-    let y = applyReportHeader(doc, "Official Trip Ticket", `Approved by Admin: ${adminUser.name || adminUser.email}`, 10, 5);
+    let y = applyReportHeader(doc, reportTitle, `Approved by Admin: ${adminUser.name || adminUser.email}`, 10, 5);
     y += 5;
 
     // --- Content ---
@@ -169,35 +177,50 @@ const generateTripTicketHalfA4PDF = async (trip: any, adminUser: User) => {
     doc.setFont(undefined, 'normal');
     doc.text(`Date: ${trip.date} @ ${trip.time}`, marginX, y);
     y += 4;
-    doc.text(`Approved At: ${new Date(trip.approvedAt).toLocaleString()}`, marginX, y);
+    doc.text(`Approved At: ${new Date().toLocaleString()}`, marginX, y);
     y += 6;
     
     // --- Trip Details Table ---
     const route = [trip.pickup, ...(trip.destinations || []), trip.destination];
     
-    // 🌟 FIX: Correctly format passenger list for single and merged trips 🌟
+    // 🌟 CUSTOMER/PASSENGER LOGIC (Kept same for consistency) 🌟
     let passengers;
+    let totalPassengers = trip.passengers || 1;
+    
     if (trip.linkedTripDetails) {
         // Merged Trip: Concatenate details for all linked customers
         passengers = trip.linkedTripDetails
-            .map((d: any) => `${d.customerName || 'N/A'} (Ph: ${d.phone || 'N/A'})`)
+            .map((d: any) => 
+                `${d.customerName || d.customer || 'N/A'} (Ph: ${d.phone || d.customerPhone || 'N/A'})`
+            )
             .join('\n');
+        
+        // Recalculate total passengers from the merged list
+        totalPassengers = trip.linkedTripDetails.reduce((sum: number, d: any) => sum + (d.passengers || 1), 0);
+
     } else {
-        // Single Trip
-        passengers = `${trip.customerName || 'N/A'} (Ph: ${trip.phone || 'N/A'})`;
+        // Single Trip (use the single trip data passed in)
+        passengers = `${trip.customerName || trip.customer || 'N/A'} (Ph: ${trip.phone || trip.customerPhone || 'N/A'})`;
     }
     
-    const totalPassengers = trip.linkedTripDetails ? trip.passengers : (trip.passengers || 1);
-    
-    const tableData = [
+    // --- TABLE DATA CONSTRUCTION ---
+    let tableData = [
         ['Status', trip.status.toUpperCase()],
-        ['Vehicle No', trip.vehicleNumber || 'N/A'],
-        ['Driver', trip.driverName || 'N/A'],
+        ['Vehicle No (NEW)', trip.vehicleNumber || 'N/A'],
+        ['Driver (NEW)', trip.driverName || 'N/A'],
         ['Total Passengers', totalPassengers],
-        ['Total Cost (Est.)', trip.cost || 'LKR 0'],
-        // 🌟 Use the correctly formatted passenger list 🌟
         ['Customer(s) / Phone', passengers],
     ];
+    
+    // 🎯 NEW: Add Previous Vehicle/Driver details for Reassignment Tickets (B-serial)
+    if (isReassignedTrip) {
+        tableData.splice(2, 0, 
+            ['Prev. Vehicle No', trip.originalVehicleNumber || 'N/A'],
+            ['Prev. Driver Name', trip.originalDriverName || 'N/A'],
+            ['Prev. Driver Phone', trip.originalDriverPhone || 'N/A'], // Assuming phone is passed or retrieved
+        );
+    }
+    // Removed Total Cost (Est.) - as requested
 
     autoTable(doc, {
         startY: y,
@@ -231,6 +254,16 @@ const generateTripTicketHalfA4PDF = async (trip: any, adminUser: User) => {
     console.log(`MOCK: Generating PDF for Trip Ticket #${trip.serialNumber}`);
 };
 
+
+// 🎯 Helper to pull consistent customer data from trip object (Retained)
+const getCustomerDetails = (t: any) => ({
+    id: t.id, 
+    customerName: t.customerName || t.customer || null, // Use customerName OR customer
+    phone: t.phone || t.customerPhone || null,          // Use phone OR customerPhone
+    passengers: t.passengers, 
+    epf: t.epf || t.epfNumber || null, 
+    destination: t.destination 
+});
 
 // 🎯 RESTORED: Calculate Distance Run by Original Vehicle (Map-based)
 const calculateOriginalVehicleDistance = async (trip: any): Promise<number> => {
@@ -497,7 +530,7 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
     };
 
 
-    // --- COST CALCULATION EFFECT (Restored) ---
+    // --- COST CALCULATION EFFECT (Retained) ---
     useEffect(() => {
         const calculateCosts = async () => { 
             if (!selectedTrip || !selectedVehicle) return;
@@ -675,6 +708,16 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
         }
     };
     
+    // Helper to pull consistent customer data from trip object (Retained)
+    const getCustomerDetails = (t: any) => ({
+        id: t.id, 
+        customerName: t.customerName || t.customer || null, // Use customerName OR customer
+        phone: t.phone || t.customerPhone || null,          // Use phone OR customerPhone
+        passengers: t.passengers, 
+        epf: t.epf || t.epfNumber || null, 
+        destination: t.destination 
+    });
+
     const handleFinalizeMerge = async (masterTrip: any) => { 
         const candidateTripId = masterTrip.linkedProposalTripId;
         const finalCandidateTrip = findTripDataById(candidateTripId);
@@ -687,7 +730,10 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
         const proposal = finalCandidateTrip.mergeProposal;
         const vehicle = allVehicles.find(v => v.id === proposal.vehicleId);
 
-        const combinedPassengers = (masterTrip.passengers || 1) + (finalCandidateTrip.passengers || 1);
+        const masterDetails = getCustomerDetails(masterTrip);
+        const candidateDetails = getCustomerDetails(finalCandidateTrip);
+
+        const combinedPassengers = (masterDetails.passengers || 1) + (candidateDetails.passengers || 1);
         const masterStops = masterTrip.destinations || [];
         const candidateStops = finalCandidateTrip.destinations || [];
         const combinedStops = [...masterStops, ...candidateStops];
@@ -715,9 +761,10 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                     destinations: combinedStops,
                     isMerged: true,
                     cost: finalTripCost, 
+                    // 🎯 IMPROVED: Use the helper to ensure full customer details are captured
                     linkedTripDetails: [ 
-                        { id: masterTrip.id, customerName: masterTrip.customerName || null, phone: masterTrip.phone || null, passengers: masterTrip.passengers, epf: masterTrip.epf || null, destination: masterTrip.destination },
-                        { id: finalCandidateTrip.id, customerName: finalCandidateTrip.customerName || null, phone: finalCandidateTrip.phone || null, passengers: finalCandidateTrip.passengers, epf: finalCandidateTrip.epf || null, destination: finalCandidateTrip.destination },
+                        masterDetails,
+                        candidateDetails,
                     ],
                     
                     // Assign the vehicle proposed in the merge (Sanitized)
@@ -753,10 +800,12 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 vehicleNumber: vehicle.number, 
                 driverName: driver.fullName, 
                 passengers: combinedPassengers, 
+                cost: finalTripCost, // Re-include cost for logging, PDF function will exclude it
                 status: 'approved',
+                // 🎯 IMPROVED: Pass the correct, sanitized linked details to PDF function
                 linkedTripDetails: [ 
-                    { id: masterTrip.id, customerName: masterTrip.customerName, phone: masterTrip.phone, passengers: masterTrip.passengers, epf: masterTrip.epf, destination: masterTrip.destination },
-                    { id: finalCandidateTrip.id, customerName: finalCandidateTrip.customerName, phone: finalCandidateTrip.phone, passengers: finalCandidateTrip.passengers, epf: finalCandidateTrip.epf, destination: finalCandidateTrip.destination },
+                    masterDetails,
+                    candidateDetails,
                 ]
             }, user);
             
@@ -880,6 +929,13 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
         setShowRejectModal(true);
     };
     
+    const handleReassignVehicleChange = (vehicleId: string) => {
+        setSelectedVehicle(vehicleId);
+        // Automatically attempt to select a qualified driver
+        const qualifiedDrivers = getQualifiedDrivers(vehicleId, selectedTrip?.date || new Date().toISOString());
+        setSelectedDriver(qualifiedDrivers.length > 0 ? qualifiedDrivers[0].id : '');
+    }
+
     const handleReassignClick = async (trip: any) => { 
         setIsCalculatingCost(true); 
         setCostFirstVehicle(0);
@@ -959,7 +1015,6 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 vehicleNumber: vehicleNum,
                 cost: finalCost,
                 approvedAt: new Date().toISOString(),
-                approvedByAdmin: user.name || user.email,
                 approvedDate: new Date().toISOString().split('T')[0]
             });
 
@@ -1011,6 +1066,7 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
         
         const newVehicle = allVehicles.find(v => v.id === selectedVehicle);
         const newDriver = allDrivers.find(d => d.id === selectedDriver);
+        const oldDriver = allDrivers.find(d => d.id === selectedTrip.driverId);
         
         if (!newVehicle || !newDriver) {
             alert('Selected vehicle or driver data is missing.');
@@ -1021,6 +1077,11 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
         const oldVehicleNumber = selectedTrip.vehicleNumber;
         const oldDriverId = selectedTrip.driverId;
         const oldDriverName = selectedTrip.driverName;
+        // 🎯 NEW: Get old driver's phone number for the PDF ticket
+        const oldDriverPhone = oldDriver?.phone || 'N/A';
+
+        // Calculate final cost string
+        const finalCostString = `LKR ${costFirstVehicle + costSecondVehicle}`;
 
         try {
             await runTransaction(db, async (transaction) => {
@@ -1043,17 +1104,20 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                     originalDriverId: oldDriverId,
                     originalDriverName: oldDriverName,
                     originalVehicleNumber: oldVehicleNumber,
+                    // 🎯 Update trip record with old driver phone for historical tracking (optional)
+                    originalDriverPhone: oldDriverPhone, 
                     driverId: newDriver.id,
                     driverName: newDriver.fullName,
                     vehicleId: newVehicle.id,
                     vehicleNumber: newVehicle.number,
-                    cost: `LKR ${costFirstVehicle + costSecondVehicle}`,
+                    cost: finalCostString, // Use the pre-calculated string
                     costBreakdown: {
                         oldVehicle: oldVehicleNumber, oldCost: costFirstVehicle,
                         newVehicle: newVehicle.number, newCost: costSecondVehicle,
                         newVehicleStartPlace: newVehicleStartLocation,
                     },
                     approvedAt: new Date().toISOString(), approvedByAdmin: user.name || user.email, approvedDate: new Date().toISOString().split('T')[0],
+                    // IMPORTANT: Clearing breakdown data as the trip is now reassigned/fixed
                     breakdownOdometer: null, breakdownLocation: null, lastVisitedStop: null,
                 });
 
@@ -1064,13 +1128,35 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                      transaction.update(oldDriverRef, { status: 'available', currentTripId: null });
                 }
                 if(oldVehicleInUsersRef?.id) {
+                    // Mark original vehicle for maintenance
                     transaction.update(doc(db, "vehicles", oldVehicleInUsersRef.id), { status: 'in-maintenance' });
                 }
             });
             
+            // 🎯 NEW: PDF Generation for the Reassignment Ticket
+            generateTripTicketHalfA4PDF({ 
+                ...selectedTrip, 
+                serialNumber: newSerialNumber, // Use the new B serial number
+                vehicleNumber: newVehicle.number, // Use new vehicle
+                driverName: newDriver.fullName, // Use new driver
+                cost: finalCostString, 
+                status: 'reassigned', // New status
+                linkedTripDetails: null, // Ensure this is null for a standard/reassigned trip
+                
+                // 🎯 Pass OLD vehicle/driver info for the ticket
+                originalVehicleNumber: oldVehicleNumber,
+                originalDriverName: oldDriverName,
+                originalDriverPhone: oldDriverPhone, // Include old driver phone
+                
+                // Pass customer details for single trip ticket generation
+                customerName: selectedTrip.customerName || selectedTrip.customer,
+                phone: selectedTrip.phone || selectedTrip.customerPhone
+            }, user);
+
+
             await logAction(user.email, 'TRIP_REASSIGNMENT', `Reassigned broken Trip #${selectedTrip.serialNumber} (New SN: ${newSerialNumber}) to ${newVehicle.number}.`, { targetId: selectedTrip.id, newDriverId: newDriver.id });
             
-            alert(`Reassignment successful! Trip #${newSerialNumber} is now assigned to ${newDriver.fullName}.`);
+            alert(`Reassignment successful! Trip #${newSerialNumber} is now assigned to ${newDriver.fullName}. Ticket PDF generated.`);
             setShowReassignModal(false);
 
         } catch (err) {
@@ -1089,11 +1175,11 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
     const qualifiedDriversForApproval = selectedTrip && selectedVehicle ? getQualifiedDrivers(selectedVehicle, selectedTrip.date) : [];
     
     const getMergeQualifiedVehicles = () => {
-         if (!masterTripData || !candidateTripData) return [];
-         
-         const combinedPax = (masterTripData.passengers || 1) + (candidateTripData.passengers || 1);
-         // Filter for vehicles that are available and have enough SEATS and are not busy on the trip date
-         return getVehiclesAvailableOnDate(masterTripData.date).filter(v => v.seats >= combinedPax);
+          if (!masterTripData || !candidateTripData) return [];
+          
+          const combinedPax = (masterTripData.passengers || 1) + (candidateTripData.passengers || 1);
+          // Filter for vehicles that are available and have enough SEATS and are not busy on the trip date
+          return getVehiclesAvailableOnDate(masterTripData.date).filter(v => v.seats >= combinedPax);
     };
 
 
@@ -1107,7 +1193,7 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 </div>
                 {error && <div className="mb-4 p-3 text-red-600 bg-red-50 border border-red-200 rounded-lg">{error}</div>}
                 
-                {/* 🆕 PENDING MERGE SECTION */}
+                {/* 🆕 PENDING MERGE SECTION (Retained) */}
                 <div className="mb-8 border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
                     <div onClick={() => setCollapsed(prev => ({ ...prev, merge: !prev.merge }))} className="bg-purple-100 p-4 cursor-pointer flex justify-between items-center">
                         <h2 className="text-xl text-purple-700 font-bold flex items-center gap-2"><MessageSquare className="w-5 h-5"/> Merge Candidates ({mergeCandidateTrips.length})</h2>
@@ -1129,46 +1215,46 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                                      statusText = `Awaiting User Consent. Status: A: ${masterTrip.mergeProposal?.consentA || 'N/A'}, B: ${masterTrip.mergeProposal?.consentB || 'N/A'}`;
                                      buttonAction = <div className='flex gap-2'>
                                                             <button 
-                                                                 onClick={() => handleCancelMergeProposal(masterTrip)} 
-                                                                 className="px-4 py-1.5 border border-red-300 text-red-600 rounded-xl text-sm hover:bg-red-50"
-                                                             >
-                                                                 Cancel Proposal
-                                                             </button>
-                                                         </div>;
+                                                               onClick={() => handleCancelMergeProposal(masterTrip)} 
+                                                               className="px-4 py-1.5 border border-red-300 text-red-600 rounded-xl text-sm hover:bg-red-50"
+                                                           >
+                                                               Cancel Proposal
+                                                           </button>
+                                                        </div>;
                                  } else if (masterTrip.status === 'approved_merge_request') {
                                      statusText = `Consents Received. Ready for Finalization.`;
                                      buttonAction = <button 
-                                                         onClick={() => handleFinalizeMerge(masterTrip)} 
-                                                         className="px-4 py-1.5 bg-green-600 text-white rounded-xl text-sm hover:bg-green-700"
-                                                     >
-                                                         Finalize Merge
-                                                     </button>;
+                                                        onClick={() => handleFinalizeMerge(masterTrip)} 
+                                                        className="px-4 py-1.5 bg-green-600 text-white rounded-xl text-sm hover:bg-green-700"
+                                                    >
+                                                        Finalize Merge
+                                                    </button>;
                                  } else if (candidateTrip.status === 'pending_merge') {
                                      statusText = `Potential Merge with Master Trip #${masterTrip.serialNumber || 'N/A'} (Total Pax: ${(masterTrip.passengers || 1) + (candidateTrip.passengers || 1)})`;
                                      buttonAction = <div className='flex gap-2'>
-                                                         <button 
-                                                             onClick={() => handleCancelMergeProposal(candidateTrip)} 
-                                                             className="px-4 py-1.5 border border-red-300 text-red-600 rounded-xl text-sm hover:bg-red-50"
-                                                         >
-                                                             Reject Merge
-                                                         </button>
-                                                         <button 
-                                                             onClick={() => handlePrepareMergeProposal(candidateTrip)} 
-                                                             className="px-4 py-1.5 bg-purple-600 text-white rounded-xl text-sm hover:bg-purple-700"
-                                                         >
-                                                             Select Vehicle & Propose
-                                                         </button>
-                                                     </div>;
+                                                        <button 
+                                                            onClick={() => handleCancelMergeProposal(candidateTrip)} 
+                                                            className="px-4 py-1.5 border border-red-300 text-red-600 rounded-xl text-sm hover:bg-red-50"
+                                                        >
+                                                            Reject Merge
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handlePrepareMergeProposal(candidateTrip)} 
+                                                            className="px-4 py-1.5 border border-blue-300 bg-blue-900 text-blue rounded-xl text-sm hover:bg-purple-700"
+                                                        >
+                                                            Select Vehicle & Propose
+                                                        </button>
+                                                    </div>;
                                  } else if (masterTrip.status === 'merge_rejected') {
                                      statusText = `REJECTED by User. Reason: ${masterTrip.rejectionReason || 'No reason provided.'}`;
                                      buttonAction = <div className='flex gap-2'>
-                                                         <button 
-                                                             onClick={() => handleCancelMergeProposal(masterTrip)} 
-                                                             className="px-4 py-1.5 border border-red-300 text-red-600 rounded-xl text-sm hover:bg-red-50"
-                                                         >
-                                                             Clear Rejection & Revert
-                                                         </button>
-                                                     </div>;
+                                                        <button 
+                                                            onClick={() => handleCancelMergeProposal(masterTrip)} 
+                                                            className="px-4 py-1.5 border border-red-300 text-red-600 rounded-xl text-sm hover:bg-red-50"
+                                                        >
+                                                            Clear Rejection & Revert
+                                                        </button>
+                                                    </div>;
                                  } else {
                                      return null; 
                                  }
@@ -1228,7 +1314,7 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 </div>
 
 
-                {/* 🆕 BROKEN DOWN TRIPS SECTION */}
+                {/* 🆕 BROKEN DOWN TRIPS SECTION (Retained) */}
                 <div className="mb-8 border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
                     <div onClick={() => setCollapsed(prev => ({ ...prev, broken: !prev.broken }))} className="bg-yellow-100 p-4 cursor-pointer flex justify-between items-center">
                         <h2 className="text-xl text-yellow-700 font-bold flex items-center gap-2"><Wrench className="w-5 h-5"/> Breakdown / Reassignment ({brokenTrips.length})</h2>
@@ -1237,27 +1323,27 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                     {!collapsed.broken && (
                         <div className="p-4 space-y-4 bg-white">
                             {brokenTrips.map((trip) => (
-                                <Card key={trip.id} className="p-4 border-l-4 border-yellow-500 bg-yellow-50">
-                                    <div className="flex justify-between mb-4">
-                                        <div className="text-lg text-gray-900 font-bold">Trip #{trip.serialNumber || trip.id} - Breakdown</div>
-                                        <Badge status="broken-down" size="md" />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-                                        <div>
-                                            <p className="font-medium text-gray-700">Original Vehicle:</p>
-                                            <p>{trip.vehicleNumber}</p>
-                                        </div>
-                                        <div>
-                                            <p className="font-medium text-gray-700">New Pickup Location:</p>
-                                            <p className="text-red-600 font-semibold">{trip.breakdownLocation}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex justify-end pt-4 border-t border-yellow-200">
-                                        <button onClick={() => handleReassignClick(trip)} className="px-6 py-2 bg-yellow-600 text-white rounded-xl flex items-center gap-2 hover:bg-yellow-700 shadow-lg">
-                                            <Car className="w-5 h-5"/> Assign New Vehicle
-                                        </button>
-                                    </div>
-                                </Card>
+                                 <Card key={trip.id} className="p-4 border-l-4 border-yellow-500 bg-yellow-50">
+                                     <div className="flex justify-between mb-4">
+                                         <div className="text-lg text-gray-900 font-bold">Trip #{trip.serialNumber || trip.id} - Breakdown</div>
+                                         <Badge status="broken-down" size="md" />
+                                     </div>
+                                     <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                                         <div>
+                                             <p className="font-medium text-gray-700">Original Vehicle:</p>
+                                             <p>{trip.vehicleNumber}</p>
+                                         </div>
+                                         <div>
+                                             <p className="font-medium text-gray-700">New Pickup Location:</p>
+                                             <p className="text-red-600 font-semibold">{trip.breakdownLocation}</p>
+                                         </div>
+                                     </div>
+                                     <div className="flex justify-end pt-4 border-t border-yellow-200">
+                                         <button onClick={() => handleReassignClick(trip)} className="px-6 py-2 bg-orange-600 text-black rounded-xl flex items-center gap-2 hover:bg-yellow-700 shadow-lg">
+                                             <Car className="w-5 h-5"/> Assign New Vehicle
+                                         </button>
+                                     </div>
+                                 </Card>
                             ))}
                             {brokenTrips.length === 0 && <p className="text-center text-gray-500 p-4">No trips currently reported as broken down.</p>}
                         </div>
@@ -1265,64 +1351,64 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 </div>
                 
                 
-                {/* PENDING TRIPS SECTION */}
+                {/* PENDING TRIPS SECTION (Retained) */}
                 <div className="mb-8 border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
                     <div className="flex justify-between items-center bg-blue-100 p-4">
-                                 <div onClick={() => setCollapsed(prev => ({ ...prev, pending: !prev.pending }))} className="cursor-pointer flex items-center gap-2">
-                                     <h2 className="text-xl text-blue-700 font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> Pending Trip Requests ({pendingTrips.length})</h2>
-                                     {collapsed.pending ? <ChevronDown className="w-5 h-5 text-blue-700"/> : <ChevronUp className="w-5 h-5 text-blue-700"/>}
-                                 </div>
-                                 {/* 💥 SCAN BUTTON 💥 */}
-                                 <button 
-                                     onClick={handleScanForMerges} 
-                                     className="px-4 py-1.5 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 flex items-center gap-2"
-                                 >
-                                     <Search className='w-4 h-4'/> Scan for Merges
-                                 </button>
+                                     <div onClick={() => setCollapsed(prev => ({ ...prev, pending: !prev.pending }))} className="cursor-pointer flex items-center gap-2">
+                                         <h2 className="text-xl text-blue-700 font-bold flex items-center gap-2"><Clock className="w-5 h-5"/> Pending Trip Requests ({pendingTrips.length})</h2>
+                                         {collapsed.pending ? <ChevronDown className="w-5 h-5 text-blue-700"/> : <ChevronUp className="w-5 h-5 text-blue-700"/>}
+                                     </div>
+                                     {/* 💥 SCAN BUTTON 💥 */}
+                                     <button 
+                                         onClick={handleScanForMerges} 
+                                         className="px-4 py-1.5 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 flex items-center gap-2"
+                                     >
+                                         <Search className='w-4 h-4'/> Scan for Merges
+                                     </button>
                     </div>
                     {!collapsed.pending && (
                         <div className="p-4 space-y-4 bg-white">
                             {pendingTrips.map((trip) => (
-                                <Card key={trip.id} className="p-6">
-                                    <div className="flex justify-between items-start mb-4">
-                                        <div className="text-xl text-gray-900 font-bold">Trip #{trip.serialNumber || trip.id}</div>
-                                        <Badge status="pending" />
-                                    </div>
-                                    
-                                    {/* 💥 TRIP DATE & TIME DISPLAY 💥 */}
-                                    <div className="flex items-center gap-4 mb-4 text-sm font-medium text-gray-600">
-                                        <div className="flex items-center gap-2">
-                                            <Calendar className="w-4 h-4 text-blue-500" />
-                                            <span>{trip.date}</span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <Clock className="w-4 h-4 text-blue-500" />
-                                            <span>{trip.time}</span>
-                                        </div>
-                                    </div>
-                                    {/* 💥 END DATE & TIME DISPLAY 💥 */}
+                                 <Card key={trip.id} className="p-6">
+                                     <div className="flex justify-between items-start mb-4">
+                                         <div className="text-xl text-gray-900 font-bold">Trip #{trip.serialNumber || trip.id}</div>
+                                         <Badge status="pending" />
+                                     </div>
+                                     
+                                     {/* 💥 TRIP DATE & TIME DISPLAY 💥 */}
+                                     <div className="flex items-center gap-4 mb-4 text-sm font-medium text-gray-600">
+                                         <div className="flex items-center gap-2">
+                                             <Calendar className="w-4 h-4 text-blue-500" />
+                                             <span>{trip.date}</span>
+                                         </div>
+                                         <div className="flex items-center gap-2">
+                                             <Clock className="w-4 h-4 text-blue-500" />
+                                             <span>{trip.time}</span>
+                                         </div>
+                                     </div>
+                                     {/* 💥 END DATE & TIME DISPLAY 💥 */}
 
 
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                                        <div>
-                                            <div className="flex items-center gap-2 mb-2"><UserIcon className="w-4 h-4 text-gray-500"/><span className="font-medium">{trip.customerName || trip.customer}</span></div>
-                                            <div className="text-sm text-gray-600 ml-6">{trip.epf || trip.epfNumber}</div>
-                                            <div className="flex items-center gap-2 mt-2"><PaxIcon className='w-4 h-4 text-gray-500'/><span className="font-medium">Passengers: {trip.passengers || 1}</span></div>
-                                        </div>
-                                        <div>
-                                            <div className="flex items-start gap-2 mb-2"><MapPin className="w-4 h-4 text-green-600 mt-1"/><span className="font-medium">{trip.pickup}</span></div>
-                                            <div className="ml-6"><StopList stops={trip.destinations} destination={trip.destination} /></div>
-                                            <div className="flex items-center gap-4 text-sm mt-3 p-2 bg-gray-50 rounded-lg">
-                                                <span className="text-blue-600 font-medium">{trip.distance || '0 km'}</span>
-                                                <span className="text-green-600 font-bold">{trip.cost || 'LKR 0'}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="flex justify-end gap-3 pt-6 border-t">
-                                        <button onClick={() => handleRejectClick(trip)} className="px-6 py-2 border border-red-300 text-red-600 rounded-xl">Reject</button>
-                                        <button onClick={() => handleApproveClick(trip)} className="px-6 py-2 bg-green-600 text-white rounded-xl">Approve</button>
-                                    </div>
-                                </Card>
+                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                         <div>
+                                             <div className="flex items-center gap-2 mb-2"><UserIcon className="w-4 h-4 text-gray-500"/><span className="font-medium">{trip.customerName || trip.customer}</span></div>
+                                             <div className="text-sm text-gray-600 ml-6">{trip.epf || trip.epfNumber}</div>
+                                             <div className="flex items-center gap-2 mt-2"><PaxIcon className='w-4 h-4 text-gray-500'/><span className="font-medium">Passengers: {trip.passengers || 1}</span></div>
+                                         </div>
+                                         <div>
+                                             <div className="flex items-start gap-2 mb-2"><MapPin className="w-4 h-4 text-green-600 mt-1"/><span className="font-medium">{trip.pickup}</span></div>
+                                             <div className="ml-6"><StopList stops={trip.destinations} destination={trip.destination} /></div>
+                                             <div className="flex items-center gap-4 text-sm mt-3 p-2 bg-gray-50 rounded-lg">
+                                                 <span className="text-blue-600 font-medium">{trip.distance || '0 km'}</span>
+                                                 <span className="text-green-600 font-bold">{trip.cost || 'LKR 0'}</span>
+                                             </div>
+                                         </div>
+                                     </div>
+                                     <div className="flex justify-end gap-3 pt-6 border-t">
+                                         <button onClick={() => handleRejectClick(trip)} className="px-6 py-2 border border-red-300 text-red-600 rounded-xl">Reject</button>
+                                         <button onClick={() => handleApproveClick(trip)} className="px-6 py-2 bg-green-600 text-white rounded-xl">Approve</button>
+                                     </div>
+                                 </Card>
                             ))}
                             {pendingTrips.length === 0 && brokenTrips.length === 0 && mergeCandidateTrips.length === 0 && <p className="text-center text-gray-500 p-10">No outstanding requests.</p>}
                         </div>
@@ -1330,7 +1416,7 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 </div>
             </div>
 
-            {/* Approve Modal (Omitted for brevity) */}
+            {/* Approve Modal (Retained) */}
             {showApproveModal && selectedTrip && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <Card className="w-full max-w-2xl p-6">
@@ -1397,7 +1483,7 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 </div>
             )}
             
-            {/* Reject Modal (Existing) */}
+            {/* Reject Modal (Retained) */}
             {showRejectModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <Card className="w-full max-w-md p-6">
@@ -1411,170 +1497,170 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                 </div>
             )}
             
-            {/* Reassign Modal (Breakdown) - Omitted for brevity */}
+            {/* Reassign Modal (Breakdown) - Retained */}
             {showReassignModal && selectedTrip && (
                  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                      <Card className="w-full max-w-3xl p-6 overflow-y-auto">
-                         <h3 className="text-xl font-bold mb-4 text-yellow-700 flex items-center gap-2"><Car className="w-5 h-5"/> Reassign Vehicle for Trip #{selectedTrip.serialNumber || selectedTrip.id}</h3>
-                         
-                         {/* Display Driver Reported Breakdown Details */}
-                         <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                             <p className="font-medium text-gray-700 mb-2">Driver Reported Breakdown Details:</p>
-                             <div className='grid grid-cols-2 gap-2 text-sm'>
-                                 <div className='font-semibold text-gray-800'>Original Vehicle:</div>
-                                 <div className='medium'>{selectedTrip.vehicleNumber}</div>
-                                 <div className='font-semibold text-gray-800'>Odometer at Start:</div>
-                                 <div className='medium'>{selectedTrip.odometerStart || 'N/A'} km</div>
-                                 <div className='font-semibold text-gray-800'>Last Visited Stop:</div>
-                                 <div className='medium'>{selectedTrip.lastVisitedStop || 'N/A'}</div>
-                                 <div className='font-semibold text-gray-800'>New Pickup Location (Breakdown):</div>
-                                 <div className='text-red-600 font-semibold text-xs break-all'>{selectedTrip.breakdownLocation}</div>
-                             </div>
-                         </div>
+                          <h3 className="text-xl font-bold mb-4 text-yellow-700 flex items-center gap-2"><Car className="w-5 h-5"/> Reassign Vehicle for Trip #{selectedTrip.serialNumber || selectedTrip.id}</h3>
+                          
+                          {/* Display Driver Reported Breakdown Details */}
+                          <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                              <p className="font-medium text-gray-700 mb-2">Driver Reported Breakdown Details:</p>
+                              <div className='grid grid-cols-2 gap-2 text-sm'>
+                                  <div className='font-semibold text-gray-800'>Original Vehicle:</div>
+                                  <div className='medium'>{selectedTrip.vehicleNumber}</div>
+                                  <div className='font-semibold text-gray-800'>Odometer at Start:</div>
+                                  <div className='medium'>{selectedTrip.odometerStart || 'N/A'} km</div>
+                                  <div className='font-semibold text-gray-800'>Last Visited Stop:</div>
+                                  <div className='medium'>{selectedTrip.lastVisitedStop || 'N/A'}</div>
+                                  <div className='font-semibold text-gray-800'>New Pickup Location (Breakdown):</div>
+                                  <div className='text-red-600 font-semibold text-xs break-all'>{selectedTrip.breakdownLocation}</div>
+                              </div>
+                          </div>
 
-                         <div className="grid grid-cols-2 gap-4 mb-4">
-                             {/* Vehicle Selection */}
-                             <div>
-                                 <label className="block text-sm font-medium text-gray-700 mb-1">Assign New Vehicle</label>
-                                 <select 
-                                     className="w-full p-3 border rounded-xl" 
-                                     value={selectedVehicle} 
-                                     onChange={e => handleReassignVehicleChange(e.target.value)}
-                                 >
-                                     <option value="">Select Available Vehicle</option>
-                                     {getVehiclesAvailableOnDate(selectedTrip.date).map(v => (
-                                         <option key={v.id} value={v.id}>
-                                             {v.number} - {v.model} (Req: {getVehicleRequiredLicense(v)})
-                                         </option>
-                                     ))}
-                                 </select>
-                             </div>
-                             
-                             {/* Driver Selection */}
-                             <div>
-                                 <label className="block text-sm font-medium text-gray-700 mb-1">Assign Driver</label>
-                                 <select 
-                                     className={`w-full p-3 border rounded-xl ${!selectedVehicle ? 'bg-gray-100' : ''}`} 
-                                     value={selectedDriver} 
-                                     onChange={e => setSelectedDriver(e.target.value)}
-                                     disabled={!selectedVehicle}
-                                 >
-                                     <option value="">Select Qualified Driver</option>
-                                     {getQualifiedDrivers(selectedVehicle, selectedTrip.date).map(d => (
-                                         <option key={d.id} value={d.id}>
-                                             {d.fullName} (Lic: {d.licenseType}) {d.vehicle ? `[Assigned: ${d.vehicle}]` : '[Unassigned]'}
-                                         </option>
-                                     ))}
-                                 </select>
-                                 {selectedVehicle && getQualifiedDrivers(selectedVehicle, selectedTrip.date).length === 0 && (
-                                      <p className='text-xs text-red-500 mt-1'>No available drivers are qualified for this vehicle type.</p>
-                                 )}
-                             </div>
-                             
-                             {/* NEW INPUT: New Vehicle Start Location */}
-                             <div className='col-span-2 relative z-10'>
-                                 <label className="block text-sm font-medium text-gray-700 mb-1">New Vehicle Start Place (Empty Leg)</label>
-                                 <input
-                                     type="text"
-                                     value={newVehicleStartLocation}
-                                     onChange={(e) => handleSearchNewStart(e.target.value)}
-                                     onFocus={() => setActiveSearchNewStart(true)}
-                                     placeholder="Enter depot/starting location..."
-                                     className="w-full p-3 border rounded-xl"
-                                 />
-                                 {activeSearchNewStart && suggestionsNewStart.length > 0 && (
-                                      <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-1 shadow-lg max-h-40 overflow-y-auto z-20">
-                                          {suggestionsNewStart.map((place, idx) => (
-                                              <div key={idx} onClick={() => selectSuggestionNewStart(place)} className="p-3 hover:bg-gray-50 cursor-pointer text-sm border-b last:border-0 flex items-center gap-2">
-                                                  <MapPin className="w-4 h-4 text-gray-400" />
-                                                  {place.display_name}
-                                              </div>
-                                          ))}
-                                      </div>
-                                 )}
-                             </div>
-                             
-                         </div>
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                              {/* Vehicle Selection */}
+                              <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">Assign New Vehicle</label>
+                                  <select 
+                                      className="w-full p-3 border rounded-xl" 
+                                      value={selectedVehicle} 
+                                      onChange={e => handleReassignVehicleChange(e.target.value)}
+                                  >
+                                      <option value="">Select Available Vehicle</option>
+                                      {getVehiclesAvailableOnDate(selectedTrip.date).map(v => (
+                                          <option key={v.id} value={v.id}>
+                                              {v.number} - {v.model} (Req: {getVehicleRequiredLicense(v)})
+                                          </option>
+                                      ))}
+                                  </select>
+                              </div>
+                              
+                              {/* Driver Selection */}
+                              <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">Assign Driver</label>
+                                  <select 
+                                      className={`w-full p-3 border rounded-xl ${!selectedVehicle ? 'bg-gray-100' : ''}`} 
+                                      value={selectedDriver} 
+                                      onChange={e => setSelectedDriver(e.target.value)}
+                                      disabled={!selectedVehicle}
+                                  >
+                                      <option value="">Select Qualified Driver</option>
+                                      {getQualifiedDrivers(selectedVehicle, selectedTrip.date).map(d => (
+                                          <option key={d.id} value={d.id}>
+                                              {d.fullName} (Lic: {d.licenseType}) {d.vehicle ? `[Assigned: ${d.vehicle}]` : '[Unassigned]'}
+                                          </option>
+                                      ))}
+                                  </select>
+                                  {selectedVehicle && getQualifiedDrivers(selectedVehicle, selectedTrip.date).length === 0 && (
+                                       <p className='text-xs text-red-500 mt-1'>No available drivers are qualified for this vehicle type.</p>
+                                   )}
+                              </div>
+                              
+                              {/* NEW INPUT: New Vehicle Start Location */}
+                              <div className='col-span-2 relative z-10'>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">New Vehicle Start Place (Empty Leg)</label>
+                                  <input
+                                      type="text"
+                                      value={newVehicleStartLocation}
+                                      onChange={(e) => handleSearchNewStart(e.target.value)}
+                                      onFocus={() => setActiveSearchNewStart(true)}
+                                      placeholder="Enter depot/starting location..."
+                                      className="w-full p-3 border rounded-xl"
+                                  />
+                                  {activeSearchNewStart && suggestionsNewStart.length > 0 && (
+                                       <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-1 shadow-lg max-h-40 overflow-y-auto z-20">
+                                            {suggestionsNewStart.map((place, idx) => (
+                                                 <div key={idx} onClick={() => selectSuggestionNewStart(place)} className="p-3 hover:bg-gray-50 cursor-pointer text-sm border-b last:border-0 flex items-center gap-2">
+                                                     <MapPin className="w-4 h-4 text-gray-400" />
+                                                     {place.display_name}
+                                                 </div>
+                                             ))}
+                                       </div>
+                                   )}
+                              </div>
+                              
+                          </div>
 
-                         <h4 className="font-bold text-lg mt-6 mb-3">Cost Calculation</h4>
-                         <div className="grid grid-cols-2 gap-4">
-                             {/* Cost First Vehicle (Automated Calculation - BROKEN VEHICLE COST) */}
-                             <div>
-                                 <label className="block text-sm font-medium text-gray-700 mb-1">Cost for Original Vehicle (LKR)</label>
-                                 <div className="relative">
-                                     <input 
-                                         type="number" 
-                                         value={costFirstVehicle} 
-                                         readOnly 
-                                         className="w-full p-3 border rounded-xl bg-gray-100" 
-                                         placeholder="Calculating..."
-                                         min="0"
-                                     />
-                                     {isCalculatingCost && (
-                                         <div className="absolute inset-y-0 right-0 flex items-center pr-3">
-                                             <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                                         </div>
-                                     )}
-                                 </div>
-                                 <p className="text-xs text-gray-500 mt-1">
-                                     Calculated Cost 1 (Estimated KM Run * Original Rate): <span className={`font-bold ${costFirstVehicle > 0 ? 'text-green-600' : 'text-gray-400'}`}>LKR {costFirstVehicle}</span>
-                                 </p>
-                                 {costFirstVehicle === 0 && !isCalculatingCost && (
-                                      <p className='text-xs text-red-500 font-semibold'>Warning: Cost 1 is 0. Check addresses or ODO data.</p>
-                                 )}
-                             </div>
+                          <h4 className="font-bold text-lg mt-6 mb-3">Cost Calculation</h4>
+                          <div className="grid grid-cols-2 gap-4">
+                              {/* Cost First Vehicle (Automated Calculation - BROKEN VEHICLE COST) */}
+                              <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost for Original Vehicle (LKR)</label>
+                                  <div className="relative">
+                                      <input 
+                                          type="number" 
+                                          value={costFirstVehicle} 
+                                          readOnly 
+                                          className="w-full p-3 border rounded-xl bg-gray-100" 
+                                          placeholder="Calculating..."
+                                          min="0"
+                                      />
+                                      {isCalculatingCost && (
+                                           <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                                               <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                                           </div>
+                                       )}
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-1">
+                                       Calculated Cost 1 (Estimated KM Run * Original Rate): <span className={`font-bold ${costFirstVehicle > 0 ? 'text-green-600' : 'text-gray-400'}`}>LKR {costFirstVehicle}</span>
+                                  </p>
+                                  {costFirstVehicle === 0 && !isCalculatingCost && (
+                                       <p className='text-xs text-red-500 font-semibold'>Warning: Cost 1 is 0. Check addresses or ODO data.</p>
+                                   )}
+                              </div>
 
-                             {/* Cost Second Vehicle (Automated Calculation - NEW VEHICLE COST) */}
-                             <div>
-                                 <label className="block text-sm font-medium text-gray-700 mb-1">Cost for New Vehicle (LKR)</label>
-                                 <div className="relative">
-                                     <input 
-                                         type="number" 
-                                         value={costSecondVehicle} 
-                                         readOnly 
-                                         className="w-full p-3 border rounded-xl bg-gray-100" 
-                                         placeholder="Calculating..."
-                                         min="0"
-                                     />
-                                     {isCalculatingCost && (
-                                         <div className="absolute inset-y-0 right-0 flex items-center pr-3">
-                                             <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                                         </div>
-                                     )}
-                                 </div>
-                                 <p className="text-xs text-gray-500 mt-1">
-                                     Calculated Cost 2 (Empty Leg + Passenger Route * New Rate).
-                                 </p>
-                                 {costSecondVehicle === 0 && !isCalculatingCost && selectedVehicle && (
-                                      <p className='text-xs text-red-500 font-semibold'>Waiting for New Start Place calculation.</p>
-                                 )}
-                             </div>
-                         </div>
-                         
-                         <div className="mt-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                             <p className="font-bold text-blue-700">Total Trip Cost: LKR {costFirstVehicle + costSecondVehicle}</p>
-                         </div>
+                              {/* Cost Second Vehicle (Automated Calculation - NEW VEHICLE COST) */}
+                              <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost for New Vehicle (LKR)</label>
+                                  <div className="relative">
+                                      <input 
+                                          type="number" 
+                                          value={costSecondVehicle} 
+                                          readOnly 
+                                          className="w-full p-3 border rounded-xl bg-gray-100" 
+                                          placeholder="Calculating..."
+                                          min="0"
+                                      />
+                                      {isCalculatingCost && (
+                                           <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                                               <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                                           </div>
+                                       )}
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-1">
+                                       Calculated Cost 2 (Empty Leg + Passenger Route * New Rate).
+                                  </p>
+                                  {costSecondVehicle === 0 && !isCalculatingCost && selectedVehicle && (
+                                       <p className='text-xs text-red-500 font-semibold'>Waiting for New Start Place calculation.</p>
+                                   )}
+                              </div>
+                          </div>
+                          
+                          <div className="mt-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                              <p className="font-bold text-blue-700">Total Trip Cost: LKR {costFirstVehicle + costSecondVehicle}</p>
+                          </div>
 
 
-                         <div className="flex gap-3 mt-6">
-                             {/* DELETE BUTTON - Visible in modal footer */}
-                             <button onClick={() => handleCancelBrokenTrip(selectedTrip)} className="flex-1 py-3 border border-red-500 text-red-600 rounded-xl hover:bg-red-50 flex items-center justify-center gap-2">
-                                 <Trash2 className='w-5 h-5'/> Delete/Cancel Trip
-                             </button>
-                             {/* APPROVE REASSIGNMENT BUTTON */}
-                             <button 
-                                 onClick={handleApproveReassignment} 
-                                 disabled={!selectedDriver || !selectedVehicle || costSecondVehicle <= 0 || isCalculatingCost || !newVehicleStartLocation}
-                                 className="flex-1 py-3 bg-green-600 text-white rounded-xl disabled:opacity-50 hover:bg-green-700"
-                             >
-                                 {isCalculatingCost ? 'Calculating...' : 'Approve Reassignment'}
-                             </button>
-                         </div>
+                          <div className="flex gap-3 mt-6">
+                              {/* DELETE BUTTON - Visible in modal footer */}
+                              <button onClick={() => handleCancelBrokenTrip(selectedTrip)} className="flex-1 py-3 border border-red-500 text-red-600 rounded-xl hover:bg-red-50 flex items-center justify-center gap-2">
+                                  <Trash2 className='w-5 h-5'/> Delete/Cancel Trip
+                              </button>
+                              {/* APPROVE REASSIGNMENT BUTTON */}
+                              <button 
+                                  onClick={handleApproveReassignment} 
+                                  disabled={!selectedDriver || !selectedVehicle || costSecondVehicle <= 0 || isCalculatingCost || !newVehicleStartLocation}
+                                  className="flex-1 py-3 bg-green-600 text-white rounded-xl disabled:opacity-50 hover:bg-green-700"
+                              >
+                                  {isCalculatingCost ? 'Calculating...' : 'Approve Reassignment'}
+                              </button>
+                          </div>
                      </Card>
                  </div>
             )}
             
-            {/* Merge Proposal Modal */}
+            {/* Merge Proposal Modal (Retained) */}
             {showMergeProposalModal && masterTripData && candidateTripData && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <Card className="w-full max-w-xl p-6">
@@ -1595,76 +1681,76 @@ export function TripApproval({ user, onNavigate, onLogout }: TripApprovalProps) 
                                   <p className="text-xs flex items-center gap-1"><Phone className='w-3 h-3'/> Ph: {candidateTripData.phone || 'N/A'}</p>
                                   <p className="text-xs text-gray-500">EPF: {candidateTripData.epf || 'N/A'}</p>
                               </div>
-                             <div className="col-span-2 flex items-center gap-2 font-bold text-lg text-blue-700">
-                                 <CombinedUsers className='w-5 h-5'/> Total Passengers: {(masterTripData.passengers || 1) + (candidateTripData.passengers || 1)}
-                             </div>
-                             <div className="col-span-2 text-sm text-orange-600">
-                                 ⚠️ Final merged cost will be **{masterTripData.cost}** (Master Trip Cost).
-                             </div>
+                              <div className="col-span-2 flex items-center gap-2 font-bold text-lg text-blue-700">
+                                  <CombinedUsers className='w-5 h-5'/> Total Passengers: {(masterTripData.passengers || 1) + (candidateTripData.passengers || 1)}
+                              </div>
+                              <div className="col-span-2 text-sm text-orange-600">
+                                   ⚠️ Final merged cost will be **{masterTripData.cost}** (Master Trip Cost).
+                              </div>
                          </div>
 
                          {/* Vehicle Selection */}
                          <div className="mb-4">
-                             <label className="block text-sm font-medium text-gray-700 mb-1">Select Merged Vehicle (Capacity &ge; Total Passengers)</label>
-                             <select 
-                                 className="w-full p-3 border rounded-xl" 
-                                 value={proposedMergeVehicleId} 
-                                 onChange={e => handleMergeVehicleSelectChange(e.target.value)}
-                             >
-                                 <option value="">Select Suitable Vehicle</option>
-                                 {getMergeQualifiedVehicles().map(v => (
-                                     <option key={v.id} value={v.id}>
-                                         {v.number} - {v.model} (Seats: {v.seats})
-                                     </option>
-                                 ))}
-                             </select>
-                             {getMergeQualifiedVehicles().length === 0 && (
-                                 <p className='text-xs text-red-500 mt-1'>No vehicles available with enough seating capacity for the merge.</p>
-                             )}
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Select Merged Vehicle (Capacity &ge; Total Passengers)</label>
+                              <select 
+                                   className="w-full p-3 border rounded-xl" 
+                                   value={proposedMergeVehicleId} 
+                                   onChange={e => handleMergeVehicleSelectChange(e.target.value)}
+                              >
+                                   <option value="">Select Suitable Vehicle</option>
+                                   {getMergeQualifiedVehicles().map(v => (
+                                       <option key={v.id} value={v.id}>
+                                           {v.number} - {v.model} (Seats: {v.seats})
+                                       </option>
+                                   ))}
+                              </select>
+                              {getMergeQualifiedVehicles().length === 0 && (
+                                   <p className='text-xs text-red-500 mt-1'>No vehicles available with enough seating capacity for the merge.</p>
+                              )}
                          </div>
 
                          {/* DRIVER SELECTION FOR MERGE */}
                          {proposedMergeVehicleId && (
-                             <div className="mb-4">
-                                 <label className="block text-sm font-medium text-gray-700 mb-1">Select Driver for Merged Trip</label>
-                                 <select 
-                                     className="w-full p-3 border rounded-xl" 
-                                     value={selectedDriver} 
-                                     onChange={e => setSelectedDriver(e.target.value)}
-                                 >
-                                     <option value="">Select Qualified Driver</option>
-                                     {getQualifiedDrivers(proposedMergeVehicleId, masterTripData.date).map(d => (
-                                         <option key={d.id} value={d.id}>
-                                             {d.fullName} (Lic: {d.licenseType}) {d.currentTripId ? '[In Trip]' : d.vehicle ? `[Assigned: ${d.vehicle}]` : '[Unassigned]'}
-                                         </option>
-                                     ))}
-                                 </select>
-                                 {getQualifiedDrivers(proposedMergeVehicleId, masterTripData.date).length === 0 && (
-                                     <p className='text-xs text-red-500 mt-1'>No qualified drivers found for this vehicle type.</p>
-                                 )}
-                             </div>
+                              <div className="mb-4">
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">Select Driver for Merged Trip</label>
+                                  <select 
+                                       className="w-full p-3 border rounded-xl" 
+                                       value={selectedDriver} 
+                                       onChange={e => setSelectedDriver(e.target.value)}
+                                  >
+                                       <option value="">Select Qualified Driver</option>
+                                       {getQualifiedDrivers(proposedMergeVehicleId, masterTripData.date).map(d => (
+                                           <option key={d.id} value={d.id}>
+                                               {d.fullName} (Lic: {d.licenseType}) {d.currentTripId ? '[In Trip]' : d.vehicle ? `[Assigned: ${d.vehicle}]` : '[Unassigned]'}
+                                           </option>
+                                       ))}
+                                  </select>
+                                  {getQualifiedDrivers(proposedMergeVehicleId, masterTripData.date).length === 0 && (
+                                       <p className='text-xs text-red-500 mt-1'>No qualified drivers found for this vehicle type.</p>
+                                   )}
+                              </div>
                          )}
 
                          <textarea 
-                             rows={3} 
-                             value={mergeMessage} 
-                             onChange={(e) => setMergeMessage(e.target.value)}
-                             className="w-full p-3 border rounded-xl mb-4"
-                             placeholder="Message to send to the master user (A) for approval..."
+                              rows={3} 
+                              value={mergeMessage} 
+                              onChange={(e) => setMergeMessage(e.target.value)}
+                              className="w-full p-3 border rounded-xl mb-4"
+                              placeholder="Message to send to the master user (A) for approval..."
                          />
 
                          <div className="flex gap-3">
-                             <button onClick={() => setShowMergeProposalModal(false)} className="flex-1 py-3 border rounded-xl">Cancel</button>
-                             <button 
-                                 onClick={handleSendProposalToUsers} 
-                                 disabled={!proposedMergeVehicleId || !selectedDriver} 
-                                 className="flex-1 py-3 bg-purple-600 text-white rounded-xl disabled:opacity-50"
-                             >
-                                 Send Proposal to Both Users
-                             </button>
+                              <button onClick={() => setShowMergeProposalModal(false)} className="flex-1 py-3 border rounded-xl">Cancel</button>
+                              <button 
+                                   onClick={handleSendProposalToUsers} 
+                                   disabled={!proposedMergeVehicleId || !selectedDriver} 
+                                   className="flex-1 py-3 bg-purple-600 text-black border rounded-xl disabled:opacity-50"
+                              >
+                                   Send Proposal to Both Users
+                              </button>
                          </div>
-                     </Card>
-                 </div>
+                    </Card>
+                </div>
             )}
         </div>
     );

@@ -26,7 +26,7 @@ const isToday = (dateString: string) => {
 // Filters out completed, cancelled, rejected, and any past 'approved' trips.
 const isRelevantTrip = (trip: any) => {
     // 1. Exclude final states immediately
-    if (['completed', 'cancelled', 'rejected'].includes(trip.status)) {
+    if (['completed', 'cancelled', 'rejected','broken-down'].includes(trip.status)) {
         return false;
     }
 
@@ -98,29 +98,49 @@ export function DriverDashboard({ user, onNavigate, onLogout }: DriverDashboardP
         );
         
         const unsubTrips = onSnapshot(tripsQuery, (snap) => {
-            const rawTripList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            
-            // 🎯 FILTER: Exclude completed, cancelled, rejected, and past approved trips
-            const filteredTrips = rawTripList.filter(isRelevantTrip);
-            
-            const sortedTrips = sortTrips(filteredTrips);
-            setAllTrips(sortedTrips);
-            
-            // 🚨 DETERMINE CURRENT/NEXT TRIP 🚨
-            const activeTrip = sortedTrips.find(t => t.status === 'in-progress'); // Priority 1: The truly active trip
+            const rawTripList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            // 1. FILTER: Exclude irrelevant trips, including 'broken-down'. (This must be working)
+            const filteredTrips = rawTripList.filter(isRelevantTrip); 
+            
+            // 2. SORT: Order the remaining relevant trips.
+            const sortedTrips = sortTrips(filteredTrips);
+            setAllTrips(sortedTrips);
+            
+            // 🚨 CRITICAL STATE DETERMINATION 🚨
+            let finalCurrentTrip = null;
+            let tripsForSchedule: any[] = [];
+            
+            // Priority 1: Find the truly active trip
+            const activeTrip = sortedTrips.find(t => t.status === 'in-progress'); 
 
-            if (activeTrip) {
-                setCurrentTrip(activeTrip);
-                setUpcomingSchedule(sortedTrips.filter(t => t.id !== activeTrip.id));
-            } else {
-                // Priority 2: Next scheduled trip (approved or reassigned), which is the first one in the sorted list
-                const nextTrip = sortedTrips[0] || null;
-                setCurrentTrip(nextTrip); 
-                setUpcomingSchedule(sortedTrips.filter(t => t.id !== nextTrip?.id));
-            }
-            
-            setLoading(false);
-        });
+            if (activeTrip) {
+                finalCurrentTrip = activeTrip;
+                tripsForSchedule = sortedTrips.filter(t => t.id !== activeTrip.id);
+            } else {
+                const nextTrip = sortedTrips[0] || null;
+                
+                // Use the next trip only if it is explicitly approved or reassigned (the states that require action)
+                if (nextTrip && (nextTrip.status === 'approved' || nextTrip.status === 'reassigned')) {
+                    finalCurrentTrip = nextTrip;
+                    tripsForSchedule = sortedTrips.filter(t => t.id !== nextTrip.id);
+                } else {
+                    finalCurrentTrip = null;
+                    tripsForSchedule = sortedTrips; 
+                }
+            }
+            
+            // 3. SET FINAL STATES:
+            setCurrentTrip(finalCurrentTrip);
+            
+            // 🔥 CRITICAL FINAL FIX: Filter `tripsForSchedule` again using the same logic 
+            // as `isRelevantTrip` to forcefully remove all final/invalid statuses from the upcoming list.
+            setUpcomingSchedule(tripsForSchedule.filter(t => 
+                !['completed', 'cancelled', 'rejected', 'broken-down'].includes(t.status)
+            ));
+            
+            setLoading(false);
+        });
 
         // 2. Listen to MY User Profile (To see assigned vehicle)
         const unsubUser = onSnapshot(doc(db, "users", user.uid), async (docSnap) => {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Calendar, Car, User as UserIcon, MapPin, Download, Filter, ChevronDown, ChevronUp, XCircle, Ban } from 'lucide-react';
+import { Search, Calendar, Car, User as UserIcon, MapPin, Download, Filter, ChevronDown, ChevronUp, XCircle, Ban , Banknote } from 'lucide-react';
 import { User } from '../../App';
 import { TopNav } from './TopNav';
 import { Card } from './Card';
@@ -342,7 +342,9 @@ export function TripHistory({ user, onNavigate, onLogout }: TripHistoryProps) {
     if (loading) return <div className="p-10 text-center">Loading Trip History...</div>;
 
     // Check if the selected trip is cancellable by the admin
-    const isCancellable = user.role === 'admin' && 
+   const isTripCancellableByRole = selectedTrip && 
+    (user.role === 'admin' || user.role === 'driver') &&
+    (selectedTrip.status === 'approved' || selectedTrip.status === 'reassigned' || selectedTrip.status === 'in-progress' || selectedTrip.status === 'pending'); // Included 'pending' const isCancellable = user.role === 'admin' && 
                           selectedTrip && 
                           (selectedTrip.status === 'approved' || selectedTrip.status === 'reassigned');
 
@@ -461,73 +463,91 @@ export function TripHistory({ user, onNavigate, onLogout }: TripHistoryProps) {
                         )}
                     </div>
 
-                    {/* Trip Details Sidebar */}
-                    <div className="lg:col-span-1">
-                        {selectedTrip ? (
-                            <Card className="p-6 sticky top-24">
-                                <div className="flex items-center justify-between mb-6 flex-shrink-0">
-                                    <h2 className="text-lg text-gray-900">Trip Details</h2>
-                                    <Badge status={selectedTrip.status} />
-                                </div>
-                                
-                                {/* 💥 SCROLLABLE CONTENT WRAPPER 💥 */}
-                                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                                    <div className="p-4 bg-gray-50 rounded-xl">
-                                        <div className="text-xs text-gray-500 mb-1">Trip ID</div>
-                                        <div className="text-gray-900">{selectedTrip.serialNumber || selectedTrip.id}</div>
+                   {/* Trip Details Sidebar (FIXED: Independent Scrolling and Max Height) */}
+                        <div className="lg:col-span-1">
+                            {selectedTrip ? (
+                                <Card className="p-6 sticky top-4 max-h-[90vh] flex flex-col"> {/* Added max-h-[90vh] and flex-col to the sticky card */}
+                                    
+                                    {/* Header (Non-scrolling) */}
+                                    <div className="flex items-center justify-between mb-4 flex-shrink-0">
+                                        <h2 className="text-lg text-gray-900">Trip Details</h2>
+                                        <Badge status={selectedTrip.status} />
+                                    </div>
+                                    
+                                    {/* Divider (Non-scrolling) */}
+                                    <div className='mb-4'>
+                                        <div className="text-gray-900 text-2xl font-bold">#{selectedTrip.serialNumber || selectedTrip.id}</div>
+                                        <div className="text-sm text-gray-600 mt-1">{selectedTrip.date} • {selectedTrip.time}</div>
                                     </div>
 
-                                    <div className="p-4 bg-gray-50 rounded-xl">
-                                        <div className="text-xs text-gray-500 mb-2">Full Route</div>
-                                        <RouteDisplay pickup={selectedTrip.pickup} destinations={selectedTrip.destinations} destination={selectedTrip.destination} />
-                                    </div>
-
-                                    <div className="p-4 bg-gray-50 rounded-xl">
-                                        <div className="text-xs text-gray-500 mb-1">Vehicle</div>
-                                        <div className="text-gray-900">{selectedTrip.vehicleNumber || selectedTrip.vehicle || 'Not assigned'}</div>
-                                    </div>
-
-                                    <div className="p-4 bg-gray-50 rounded-xl">
-                                        <div className="text-xs text-gray-500 mb-1">Driver</div>
-                                        <div className="text-gray-900">{selectedTrip.driverName || selectedTrip.driver || 'Not assigned'}</div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4">
+                                    {/* 💥 START SCROLLABLE CONTENT WRAPPER 💥 */}
+                                    {/* flex-1 allows this div to take up all remaining vertical space in the flex parent */}
+                                    <div className="space-y-4 flex-1 overflow-y-auto pr-2"> 
+                                        
                                         <div className="p-4 bg-gray-50 rounded-xl">
-                                            <div className="text-xs text-gray-500 mb-1">Distance</div>
-                                            <div className="text-gray-900">{selectedTrip.distance || '-'}</div>
+                                            <div className="text-xs text-gray-500 mb-2">Full Route</div>
+                                            <RouteDisplay pickup={selectedTrip.pickup} destinations={selectedTrip.destinations} destination={selectedTrip.destination} />
                                         </div>
+
                                         <div className="p-4 bg-gray-50 rounded-xl">
-                                            <div className="text-xs text-gray-500 mb-1">Cost</div>
-                                            <div className="text-gray-900 font-bold text-green-600">{selectedTrip.cost || '-'}</div>
+                                            <div className="text-xs text-gray-500 mb-1">Vehicle</div>
+                                            <div className="text-gray-900">{selectedTrip.vehicleNumber || selectedTrip.vehicle || 'Not assigned'}</div>
+                                        </div>
+
+                                        <div className="p-4 bg-gray-50 rounded-xl">
+                                            <div className="text-xs text-gray-500 mb-1">Driver</div>
+                                            <div className="text-gray-900">{selectedTrip.driverName || selectedTrip.driver || 'Not assigned'}</div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="p-4 bg-gray-50 rounded-xl">
+                                                <div className="text-xs text-gray-500 mb-1">Distance</div>
+                                                <div className="text-gray-900">{selectedTrip.distance || '-'}</div>
+                                            </div>
+                                            <div className="p-4 bg-gray-50 rounded-xl">
+                                                <div className="text-xs text-gray-500 mb-1">Cost</div>
+                                                <div className="text-gray-900 font-bold text-green-600">{selectedTrip.cost || '-'}</div>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                                {/* 💥 END SCROLLABLE CONTENT WRAPPER 💥 */}
-                                
-                                <div className='mt-4 pt-4 border-t border-gray-100 flex flex-col gap-2 flex-shrink-0'>
-                                    {/* ADMIN CANCELLATION BUTTON */}
-                                    {isCancellable && (
-                                        <button 
-                                            onClick={() => handleCancelTrip(selectedTrip)} 
-                                            className="w-full flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-all font-medium"
-                                        >
-                                            <Ban className="w-5 h-5" /> Cancel Approved Trip
+                                    {/* 💥 END SCROLLABLE CONTENT WRAPPER 💥 */}
+                                    
+                                    {/* Buttons (Non-scrolling footer, uses flex-shrink-0) */}
+                                    <div className='mt-4 pt-4 border-t border-gray-100 flex flex-col gap-2 flex-shrink-0'>
+                                        {/* CANCEL TRIP BUTTON (Admin/Driver for Approved, Reassigned, or In-Progress) */}
+                                        {isTripCancellableByRole && (
+                                            <button 
+                                                onClick={() => handleCancelTrip(selectedTrip)} 
+                                                className="w-full flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-all font-medium"
+                                            >
+                                                <Ban className="w-5 h-5" /> Cancel Trip
+                                            </button>
+                                        )}
+
+                                        {/* 👇 NEW: Report Fine Button for Admin/Driver on Completed/Cancelled/Broken-down Trips */}
+                                        {(user.role === 'driver') && 
+                                        (selectedTrip.status === 'completed' || selectedTrip.status === 'broken-down' || selectedTrip.status === 'cancelled') && (
+                                            <button 
+                                                // 🚨 Action: Navigate to DriverTripDetail with a flag to open the modal
+                                                onClick={() => onNavigate('driver-trip-detail', selectedTrip.id, 'fineClaim')}
+                                                className="w-full flex items-center justify-center gap-2 py-3 bg-red-500 text-red rounded-xl hover:bg-red-600 transition-all font-medium"
+                                            >
+                                                <Banknote className="w-5 h-5" /> Report Fine Claim
+                                            </button>
+                                        )}
+
+                                        <button onClick={() => handleDownloadPDF(selectedTrip)} className="w-full flex items-center justify-center gap-2 py-3 bg-[#2563EB] text-white rounded-xl hover:bg-[#1E40AF] transition-all">
+                                            <Download className="w-5 h-5" /> Download Receipt PDF
                                         </button>
-                                    )}
-
-                                    <button onClick={() => handleDownloadPDF(selectedTrip)} className="w-full flex items-center justify-center gap-2 py-3 bg-[#2563EB] text-white rounded-xl hover:bg-[#1E40AF] transition-all">
-                                        <Download className="w-5 h-5" /> Download Receipt PDF
-                                    </button>
-                                </div>
-                            </Card>
-                        ) : (
-                            <Card className="p-12 text-center sticky top-24">
-                                <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                                <p className="text-gray-500">Select a trip to view details</p>
-                            </Card>
-                        )}
-                    </div>
+                                    </div>
+                                </Card>
+                            ) : (
+                                <Card className="p-12 text-center sticky top-4 max-h-[90vh]"> {/* Also adjust sticky top for empty card */}
+                                    <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                                    <p className="text-gray-500">Select a trip to view details</p>
+                                </Card>
+                            )}
+                        </div>
                 </div>
             </div>
         </div>
